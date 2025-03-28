@@ -447,6 +447,5 @@ def main():
         sys.exit(1)
     run(args)
 
-
-
-#python DatabaseReduction.py --paf_path /storage3/jlipovac/metagenomika_eval/zymoD6331_5esch/SRR17913199/SRR17913199/metaflye/asm.to_big_df.with_sec.asm5.sorted.paf --num_collapsed_strains /storage3/jlipovac/metagenomika_eval/zymoD6331_5esch/SRR17913199/SRR17913199/metaflye/num_of_strains.txt --reduced_list_txt /storage3/jlipovac/metagenomika_eval/zymoD6331_5esch/SRR17913199/SRR17913199/metaflye/reduced_list.txt --mapping_class /storage3/jlipovac/metagenomika_eval/zymoD6331_5esch/SRR17913199/SRR17913199/metaflye/mapping.class --reduced_db /storage3/jlipovac/metagenomika_eval/zymoD6331_5esch/SRR17913199/SRR17913199/metaflye/reduced_db.fa --threads 128
+if __name__ == "__main__":
+    main()
