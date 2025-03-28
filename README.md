@@ -14,7 +14,7 @@ metaflye = /path/to/flye
 metaMDBG = /path/to/metaMDBG
 minimap = /path/to/minimap2
 hairsplitter = /path/to/hairsplitter.py
-seqkit = seqkit
+seqkit = /path/to/seqkit
 
 [DATABASE]
 predefined_db = /path/to/database.fna
