@@ -4,7 +4,7 @@ Strain-level metagenomic classification with Metagenome Assembly driven Database
 before running:
 ```
 git clone git@github.com:lbcb-sci/MADRe.git
-conda create -n MADRe_env python=3.8 scikit-learn minimap2 flye metamdbg hairsplitter seqkit kraken2 -c conda-forge -c bioconda 
+conda create -n MADRe_env python=3.10 scikit-learn minimap2 flye metamdbg hairsplitter seqkit kraken2 -c conda-forge -c bioconda 
 conda activate MADRe_env
 ```
 set up the configuration (config.ini file):
