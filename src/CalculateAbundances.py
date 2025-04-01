@@ -173,7 +173,7 @@ def get_clusters(clusters_dir):
 
 
 
-def main(args):
+def run(args):
     logging.info("Parameters:")
     # logging.info(f"Reduced database file path: {args.reduced_db}")
     logging.info(f"Reads file path: {args.reads}")
@@ -215,7 +215,7 @@ def main(args):
 
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="MADRe.")
 
 
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    main(args)
+    run(args)
 
 if __name__ == "__main__":
     main()
