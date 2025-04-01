@@ -1,6 +1,7 @@
 import os
 import logging
 import argparse
+from argparse import Namespace
 import configparser
 from pathlib import Path
 from src import DatabaseReduction, ReadClassification, CalculateAbundances
@@ -107,17 +108,19 @@ def main():
 
     try:
         logging.info("Running DatabaseReduction...")
-        DatabaseReduction.main_from_madre(
-            db=PREDEFINED_DB,
-            paf=f"{args.out_folder}/assembly.to_big_db.paf",
-            json_path=str(PREDEFINED_DB_JSON),
-            collapsed_strains=f"{assembly_out_dir}/collapsed_strains.txt",
-            reduced_list=f"{args.out_folder}/genomes_in_reduced.txt",
-            reduced_db=f"{args.out_folder}/reduced_db.fa",
-            mapping_out=f"{args.out_folder}/mapping_contig_class.txt",
-            threads=args.threads,
-            log_path=f"{args.out_folder}/database_reduction.log"
-        )
+        dr_args = Namespace(
+        database=PREDEFINED_DB,
+        strain_species_info=str(PREDEFINED_DB_JSON),
+        paf_path=f"{args.out_folder}/assembly.to_big_db.paf",
+        num_collapsed_strains=f"{assembly_out_dir}/collapsed_strains.txt",
+        reduced_list_txt=f"{args.out_folder}/genomes_in_reduced.txt",
+        reduced_db=f"{args.out_folder}/reduced_db.fa", 
+        mapping_class=None,  
+        mapping_reduced_db=None,  
+        threads=args.threads,
+        strictness="very-strict",
+        min_contig_len=1000)
+        DatabaseReduction.run(dr_args)
     except Exception as e:
         logging.error(f"DatabaseReduction error: {e}")
         exit()
@@ -132,26 +135,26 @@ def main():
 
     try:
         logging.info("Running ReadClassification...")
-        ReadClassification.main_from_madre(
+        rc_args = Namespace(
             paf_path=f"{args.out_folder}/reads.to_reduced.paf",
-            json_path=str(PREDEFINED_DB_JSON),
-            output_path=f"{args.out_folder}/read_classification.out",
-            log_path=f"{args.out_folder}/read_classification.log"
-        )
+            strain_species_info=str(PREDEFINED_DB_JSON),
+            read_class_output=f"{args.out_folder}/read_classification.out",
+            clustering_out="")
+        ReadClassification.run(rc_args)
     except Exception as e:
         logging.error(f"ReadClassification error: {e}")
         exit()
 
     try:
         logging.info("Running CalculateAbundances...")
-        CalculateAbundances.main_from_madre(
+        ca_args = Namespace(
             db=f"{args.out_folder}/reduced_db.fa",
             reads=args.reads,
-            read_class_path=f"{args.out_folder}/read_classification.out",
-            rc_out=f"{args.out_folder}/rc_abundances.out",
-            final_out=f"{args.out_folder}/abundances.out",
-            log_path=f"{args.out_folder}/calculate_abundances.log"
-        )
+            read_class=f"{args.out_folder}/read_classification.out",
+            rc_abudances_out=f"{args.out_folder}/rc_abundances.out",
+            abudances_out=f"{args.out_folder}/abundances.out",
+            clusters="")
+        CalculateAbundances.run(ca_args)
     except Exception as e:
         logging.error(f"CalculateAbundances error: {e}")
         exit()

@@ -420,7 +420,6 @@ def main():
         help="Path to the output mapping reduced database."
     )
      
-    #TODO: provjeri da nije vise od moguceg
     parser.add_argument(
         "--threads", type=int, default=32,
         help="Number of threads (default=32)."
@@ -439,9 +438,9 @@ def main():
     args = parser.parse_args()
 
     # Check if a custom database is provided, and ensure `--strain_species_info` is also provided
-    if args.database != PREDEFINED_DB and args.strain_species_info == PREDEFINED_DB_JSON:
-        print("Error: When using a custom database path, you must also specify '--strain_species_info'.")
-        sys.exit(1)
+    # if args.database != PREDEFINED_DB and args.strain_species_info == PREDEFINED_DB_JSON:
+    #     print("Error: When using a custom database path, you must also specify '--strain_species_info'.")
+    #     sys.exit(1)
     run(args)
 
 if __name__ == "__main__":
