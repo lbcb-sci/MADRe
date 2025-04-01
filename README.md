@@ -72,7 +72,7 @@ python src/ReadClassification.py --help
 
 ### Database reduction information
 
-To run database reduction step separately you need to provide names of the output paths, mapping PAF file containg contigs mappings to large database (database needs to follow rules from [Build database](#build-database) section) and text file containing how many strains are collapsed in which contig looking like this:
+To run database reduction step separately you need to provide names of the output paths, mapping PAF file containg contigs mappings to large database (database needs to follow rules from [Build database](#build-database) section) and text file containing how many strains are collapsed in which contig. If contig represents only one strain there should be 0 next to it, if it represents 2 strains, 1 is collapsed so there should be 1 next to it. The file should look like this:
 ```
 ...
 contig_7:0 
