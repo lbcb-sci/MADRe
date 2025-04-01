@@ -5,9 +5,6 @@ import logging
 import json
 from pathlib import Path
 
-PREDEFINED_DB = "/storage3/jlipovac/kraken2bazaTest/library/bacteria/all.fa"
-PREDEFINED_DB_JSON = Path(__file__).resolve().parent / "database" / "taxids_species.json"
-
 CLEAN_THRESHOLD = {'less-strict':0.9,'strict':0.99, 'very-strict':0.999} 
 MIN_CONTIG_LEN = 1000
 
@@ -383,13 +380,13 @@ def main():
     parser = argparse.ArgumentParser(description="MADRe.")
 
     parser.add_argument(
-        "--database", type=str, default=PREDEFINED_DB,
+        "--database", type=str, required=True,
         help="Path to the strating database file (fasta/fna)."
     )
 
     parser.add_argument(
-        "--strain_species_info", type=str, default=PREDEFINED_DB_JSON,
-        help="An additional parameter required if a custom database path is provided. JSON file with info about species taxid for every strain taxid in the database."
+        "--strain_species_info", type=str, required=True,
+        help="An additional parameter required if a custom database path is provided. JSON file with info about species taxid for every strain taxid in the database. If you want to use default one provide path to MADRe/database/taxids_species.json."
     )
 
     parser.add_argument(

@@ -11,7 +11,6 @@ import os
 
 warnings.filterwarnings(action='ignore', category=DataConversionWarning)
 
-PREDEFINED_DB_JSON = Path(__file__).resolve().parent / "database" / "taxids_species.json"
 
 logging.basicConfig(
     level=logging.INFO,  # Set log level to INFO
@@ -340,22 +339,7 @@ def run(args):
             dist_matrix = pairwise_distances(arrays, metric='jaccard')
             db = DBSCAN(metric='precomputed', eps=0.9, min_samples=1)
             labels = db.fit_predict(dist_matrix)
-            for ar in arrays:
-                print()
-                print(sum(ar))
-                for arr in arrays:
-                    # if ar.all() == arr.all():
-                    #     continue
-                    npar = np.array(ar)
-                    nparr = np.array(arr)
-                    positions = np.where((npar == 1) & (nparr == 1))[0]
-                    # for i in range(0,min(10, len(positions))):
-                    #     read_id = [k for k, v in reads_index_dict.items() if v == positions[i]][0]
-                    #     print(read_id) 
-                    print(len(positions))
-            print(dist_matrix)
-            print(ref_ids)
-            print("Cluster labels:", labels)
+
             representatives = {}
             unique_labels = set(labels)
 
@@ -413,8 +397,8 @@ def main():
     )
 
     parser.add_argument(
-        "--strain_species_info", type=str, default=PREDEFINED_DB_JSON,
-        help="An additional parameter required if a custom database path is provided. JSON file with info about species taxid for every strain taxid in the database."
+        "--strain_species_info", type=str, required=True,
+        help="An additional parameter required if a custom database path is provided. JSON file with info about species taxid for every strain taxid in the database. If you want to use default one provide path to MADRe/database/taxids_species.json."
     )
 
     
