@@ -95,6 +95,7 @@ def main():
         hairsplitter_out_dir = os.path.join(assembly_out_dir, "hairsplitter")
         command = f"{PATH_HAIRSPLITTER} -i {assembly_out_dir}/assembly.fasta -f {args.reads} -t {args.threads} -o {hairsplitter_out_dir} -F 2> {args.out_folder}/hairsplitter.log"
         run_or_skip(command, f"{hairsplitter_out_dir}/tmp/cleaned_assembly.fasta", args.force)
+        os.system("rm -r ../tmp*")
     except Exception as e:
         logging.error(f"Hairsplitter error: {e}")
         exit()
@@ -102,6 +103,7 @@ def main():
     try:
         command = f"grep '^>' {hairsplitter_out_dir}/tmp/cleaned_assembly.fasta | sed 's/^>//; s/@/:/; s/edge/contig/' > {assembly_out_dir}/collapsed_strains.txt"
         run_or_skip(command, f"{assembly_out_dir}/collapsed_strains.txt", args.force)
+
     except Exception as e:
         logging.error(f"Collapsed strain processing error: {e}")
         exit()
