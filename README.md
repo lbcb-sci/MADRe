@@ -3,7 +3,7 @@ Strain-level metagenomic classification with Metagenome Assembly driven Database
 
 before running:
 ```
-git clone git@github.com:lbcb-sci/MADRe.git
+git clone https://github.com/lbcb-sci/MADRe
 conda create -n MADRe_env python=3.10 scikit-learn minimap2 flye metamdbg hairsplitter seqkit kraken2 -c conda-forge -c bioconda 
 conda activate MADRe_env
 ```
@@ -18,7 +18,7 @@ seqkit = /path/to/seqkit
 
 [DATABASE]
 predefined_db = /path/to/database.fna
-strain_species_json = ../database/taxids_species.json
+strain_species_json = ./database/taxids_species.json
 ```
 
 Recommended database is Kraken2 bacteria database - instructions on how to build it you can find in the section [Build database](#build-database).
