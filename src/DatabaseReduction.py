@@ -75,12 +75,12 @@ def calculate_mapping_class(paf_path, number_of_clusters, mapping_class_path=Non
             
 
 
-            if int(parts[1]) < MIN_CONTIG_LEN: #ako je contig kraci od 1000 zanemari
+            if int(parts[1]) < MIN_CONTIG_LEN: 
                 line = f.readline()
                 continue
 
 
-            if int(parts[11]) == 0: #ako je mapq 0 preskoci
+            if int(parts[11]) == 0: 
                 line = f.readline()
                 continue
             
@@ -157,9 +157,9 @@ def clear_NU(U, NU, number_of_clusters, genomes_ids, strictness):
         for c, v in nu_value_0_1:
             if v > CLEAN_THRESHOLD[strictness]*m:
                 nu_value_0_1_new.append((c,v))
-            else:
-                #print('cleanam: ' + str(genomes_ids[c]) + ', ' + str(v))
-                break
+            # else:
+            #     #print('cleanam: ' + str(genomes_ids[c]) + ', ' + str(v))
+            #     break
     
         nu_value_0, nu_value_1 = zip(*nu_value_0_1_new)
         NU_cleaned[contig] = [nu_value_0, nu_value_1, nu_values[2], nu_values[3]]
@@ -186,9 +186,9 @@ def EM(U, NU, genomes, max_iter, em_epsilon):
 
     logging.info("Starting EM.")
     ### Initial values
-    pi = [1/len(genomes) for _ in genomes] #vjerojatnost pripadanja genomu i
+    pi = [1/len(genomes) for _ in genomes] 
     init_pi = pi
-    theta = [1/len(genomes) for _ in genomes] #vjerojatnost da read treba biti prebacen na genom i
+    theta = [1/len(genomes) for _ in genomes] 
     pisum_beg = [0 for _ in genomes]
     U_best = [U[i][1][0] for i in U]
     U_total = 0
@@ -206,12 +206,12 @@ def EM(U, NU, genomes, max_iter, em_epsilon):
 
     len_NU = 1 if len(NU)==0 else len(NU)
 
-    for i in range(max_iter):  ## EM iterations--change to convergence 
+    for i in range(max_iter):   
         pi_old = pi
         thetasum=[0 for k in genomes]
         # E Step 
 
-        for j in NU: #for each non-uniq read, j
+        for j in NU: 
             z = NU[j] 
             ind = z[0]
             pitmp = [pi[k] for k in ind]
@@ -220,16 +220,16 @@ def EM(U, NU, genomes, max_iter, em_epsilon):
             xsum = sum(xtmp)
 
             if xsum == 0:
-                xnorm = [0.0 for _ in xtmp]         ### Avoiding dividing by 0 at all times
+                xnorm = [0.0 for _ in xtmp]         
             else:
-                xnorm = [1.*k/xsum for k in xtmp]   ## Normalize new xs
+                xnorm = [1.*k/xsum for k in xtmp]   
           
             NU[j][2] = xnorm
             for k in range(len(ind)):
                 thetasum[ind[k]] += xnorm[k]
 
         # M step    
-        pisum = [thetasum[k]+pisum_beg[k] for k in range(len(thetasum))]   ## pisum jednak thetasumu ako nema U
+        pisum = [thetasum[k]+pisum_beg[k] for k in range(len(thetasum))]   
 
         #pi = [(1.*k+pip)/(len(U)+len(NU)+pip*len(pisum)) for k in pisum]
         pi = [(1.*k)/(len(U)+len(NU)+len(pisum)) for k in pisum]
@@ -256,7 +256,7 @@ def load_dict_from_json(filename):
     with open(filename, 'r') as file:
         return json.load(file)
 
-def get_reduced_list(U, NU, reduced_list, genomes_ids, SS_info_json, number_of_clusters): #TODO: provjeriti kako je najbolje hendlat ovaj genomes_ids
+def get_reduced_list(U, NU, reduced_list, genomes_ids, SS_info_json, number_of_clusters): 
     logging.info("Finilizing list of genomes for reduced database.")
     logging.info("Iterating through UNIQUE:")
 
@@ -285,7 +285,6 @@ def get_reduced_list(U, NU, reduced_list, genomes_ids, SS_info_json, number_of_c
         #     gt = gt[:number_of_clusters[c]]
         # print(gt)
 
-        #TODO: ovaj dio je trenutno napravljen samo i iskljucivo za kraken build bazu podataka
         c_taxids = {}
 
         for a,b in gt:
@@ -302,7 +301,7 @@ def get_reduced_list(U, NU, reduced_list, genomes_ids, SS_info_json, number_of_c
             taxid = a.split('|')[1]
             species_t = SS_info[taxid]
             if species_t == species:
-                reduced_list.append(a)  #TODO:PROVJERITI OVO!
+                reduced_list.append(a) 
                 c_reduced.append(a)
             else:
                 logging.info(f'Removing {c} - {a}')
@@ -394,7 +393,6 @@ def main():
         help="Path to the PAF file of assembly mapped to database."
     )
 
-    #TODO: vidjeti trebam li ovo razdvojiti nekako
     parser.add_argument(
         "--num_collapsed_strains", type=str, required=True,
         help="File containing info about number of collapsed strains for every contig (hairsplitter output)."

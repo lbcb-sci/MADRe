@@ -13,10 +13,10 @@ warnings.filterwarnings(action='ignore', category=DataConversionWarning)
 
 
 logging.basicConfig(
-    level=logging.INFO,  # Set log level to INFO
+    level=logging.INFO,  
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.StreamHandler()  # Log to console
+        logging.StreamHandler() 
     ]
 )
 
@@ -345,11 +345,11 @@ def run(args):
 
             for label in unique_labels:
                 if label == -1:
-                    continue  # Ignore noise points
+                    continue  
 
-                cluster_indices = np.where(labels == label)[0]  # Indices of points in the cluster
-                medoid_idx = find_medoid(cluster_indices, dist_matrix)  # Find medoid index
-                representatives[label] = ref_ids[medoid_idx]  # Map back to original ref_id
+                cluster_indices = np.where(labels == label)[0]  
+                medoid_idx = find_medoid(cluster_indices, dist_matrix)  
+                representatives[label] = ref_ids[medoid_idx]  
 
             # Print results
             # print("Cluster Representatives (Medoids):")

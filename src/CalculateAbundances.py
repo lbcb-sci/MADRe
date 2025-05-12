@@ -3,10 +3,10 @@ import logging
 import os
 
 logging.basicConfig(
-    level=logging.INFO,  # Set log level to INFO
+    level=logging.INFO, 
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.StreamHandler()  # Log to console
+        logging.StreamHandler()
     ]
 )
 
