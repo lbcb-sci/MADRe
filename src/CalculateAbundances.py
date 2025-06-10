@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import gzip
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -30,13 +31,12 @@ def get_ref_count_read_class(read_class_file):
     return ref_count, read_class
 
 def get_reads_lens(reads_file):
-    f = open(reads_file, "r")
     reads_lens = {}
-
-    line = f.readline()
     rlen = 0
 
     if reads_file.endswith('fasta') or reads_file.endswith('fa') or reads_file.endswith('fna'):
+        f = open(reads_file, "r")
+        line = f.readline()
 
         while line != "":
             if line.startswith(">"):
@@ -50,8 +50,10 @@ def get_reads_lens(reads_file):
             line = f.readline()
         if rlen > 0:
             reads_lens[read_id] = rlen
-
+        f.close()
     elif reads_file.endswith('fastq') or reads_file.endswith('fq'):
+        f = open(reads_file, "r")
+        line = f.readline()
 
         while line != "":
             read_id = line.strip().split()[0][1:]
@@ -60,8 +62,31 @@ def get_reads_lens(reads_file):
             f.readline()
             f.readline()
             line = f.readline()
+        f.close()
+    elif reads_file.endswith('fa.gz') or reads_file.endswith('fasta.gz') or reads_file.endswith('fna.gz'):
 
-    f.close()
+        with gzip.open(reads_file, 'rt') as gz_f:
+            line = gz_f.readline()
+            while line != "":
+                if line.startswith(">"):
+                    if rlen > 0:
+                        reads_lens[read_id] = rlen
+                    read_id = line.strip().split()[0][1:]
+                    rlen = 0
+                else:
+                    rlen += len(line.strip())
+                line = gz_f.readline()
+            if rlen > 0:
+                reads_lens[read_id] = rlen
+    elif reads_file.endswith('fastq.gz') or reads_file.endswith('fq.gz'):
+        
+        with gzip.open(reads_file, 'rt') as gz_f:
+            line = gz_f.readline()
+            while line != "":
+                read_id = line.strip().split()[0][1:]
+                rlen = len(gz_f.readline().strip())
+                reads_lens[read_id] = rlen
+                gz_f.readline()
 
     return reads_lens
 
@@ -226,7 +251,7 @@ def main():
 
     parser.add_argument(
         "--reads", type=str, default=None, required=True,
-        help="Path to the reads file (fastq/fasta)."
+        help="Path to the reads file (fastq/fasta, can be gziped)."
     )
 
     parser.add_argument(

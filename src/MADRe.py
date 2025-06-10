@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description="MADRe")
 
     parser.add_argument("--out-folder", type=str, required=True, help="Path to the output folder.")
-    parser.add_argument("--reads", type=str, required=True, help="Path to the reads file (fastq/fq).")
+    parser.add_argument("--reads", type=str, required=True, help="Path to the reads file (fastq/fq can be gzipped).")
     parser.add_argument("--reads_flag", type=str, default='ont', choices=['pacbio', 'hifi', 'ont'], help="Reads technology.")
     parser.add_argument("--threads", type=int, default=32, help="Number of threads (default=32).")
     parser.add_argument("-F", "--force", action="store_true", help="Force rerun all steps.")
