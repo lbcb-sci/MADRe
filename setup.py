@@ -1,17 +1,21 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
     name="madre",
     version="1.0.0",
-    py_modules=["MADRe"],
-    packages=["src"],
-    package_dir={"src": "src"},
+    package_dir={"": "src"},
+    py_modules=[
+        "MADRe",
+        "ReadClassification",
+        "DatabaseReduction",
+        "CalculateAbundances"
+    ],
     entry_points={
         "console_scripts": [
             "madre = MADRe:main",
-            "read-classification = src.ReadClassification:main",
-            "database-reduction = src.DatabaseReduction:main",
-            "calculate-abundances = src.CalculateAbundances:main"
+            "read-classification = ReadClassification:main",
+            "database-reduction = DatabaseReduction:main",
+            "calculate-abundances = CalculateAbundances:main"
         ]
     },
     install_requires=[

@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: madre
+Version: 1.0.0
+Summary: Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction approach.
+Home-page: https://github.com/lbcb-sci/MADRe
+Author: Josipa Lipovac
+Author-email: josipa.lipovac@fer.unizg.hr
+Requires-Dist: scikit-learn

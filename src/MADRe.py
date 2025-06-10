@@ -4,7 +4,9 @@ import argparse
 from argparse import Namespace
 import configparser
 from pathlib import Path
-from src import DatabaseReduction, ReadClassification, CalculateAbundances
+import DatabaseReduction
+import ReadClassification
+import CalculateAbundances
 
 logging.basicConfig(
     level=logging.INFO,

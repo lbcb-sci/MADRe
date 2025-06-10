@@ -1,0 +1,30 @@
+package:
+  name: madre
+  version: "1.0.0"
+
+source:
+  path: ..
+
+build:
+  number: 0
+  noarch: python
+  script: "{{ PYTHON }} setup.py install --single-version-externally-managed --record=record.txt"
+
+requirements:
+  host:
+    - python =3.10
+    - pip
+    - setuptools
+  run:
+    - python =3.10
+    - scikit-learn
+    - minimap2
+    - flye
+    - metamdbg
+    - hairsplitter
+    - seqkit
+
+about:
+  home: https://github.com/lbcb-sci/MADRe
+  license: MIT
+  summary: "MADRe: Strain-level metagenomic classification through assembly-driven database reduction."
