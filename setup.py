@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="madre",
-    version="0.0.1",
+    version="0.0.3",
     package_dir={"": "src"},
     py_modules=[
         "MADRe",
