@@ -1,12 +1,92 @@
 # MADRe
 Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction approach
 
-before running:
+## Instalation
+
+### OPTION 1 : Conda
+
+```
+conda install bioconda::madre
+```
+set up the configuration (config.ini file):
+```                                                               
+[PATHS]
+metaflye = flye
+metaMDBG = metaMDBG
+minimap = minimap2
+hairsplitter = hairsplitter.py
+seqkit = seqkit
+
+[DATABASE]
+predefined_db = /path/to/database.fna
+strain_species_json = /path/to/taxids_species.json
+```
+NOTE: Prebuilt version of ```taxids_species.json``` can be found in GitHub database folder. More information about it find under the section [Build database](#build-database).
+
+simple run:
+
+```
+madre --reads [path_to_the_reads] --out-folder [path_to_the_out_folder] --config config.ini
+```
+more information:
+```
+madre --help
+```
+
+
+### OPTION 2 : Docker
+
+```
+docker pull jlipovac13/madre:0.0.4
+```
+simple run:
+```
+docker run --rm -v $PWD:/data jlipovac13/madre:0.0.4 madre --reads /data/reads.fastq --config /data/config.ini --out-folder /data/out_folder
+```
+
+more information:
+```
+docker run --rm -v $PWD:/data jlipovac13/madre:0.0.4 madre --help
+```
+
+set up the configuration (config.ini file):
+```                                                               
+[PATHS]
+metaflye = flye
+metaMDBG = metaMDBG
+minimap = minimap2
+hairsplitter = hairsplitter.py
+seqkit = seqkit
+
+[DATABASE]
+predefined_db = /data/database.fna
+strain_species_json = /data/taxids_species.json
+```
+NOTE: Ensure that along with input data, database.fna and taxids_species.json are in /data/ folder. Prebuilt version of ```taxids_species.json``` can be found in GitHub database folder. More information about it find under the section [Build database](#build-database).
+
+### OPTION 3: Running from source
+
 ```
 git clone https://github.com/lbcb-sci/MADRe
+cd MADRe
+```
+
+For running from source you need to install following dependecies:
+- python >= 3.10
+- scikit-learn
+- minimap2
+- flye
+- metamdbg
+- hairsplitter
+- seqkit
+- kraken2
+
+Dependencies can be installed through conda:
+```
 conda create -n MADRe_env python=3.10 scikit-learn minimap2 flye metamdbg hairsplitter seqkit kraken2 -c conda-forge -c bioconda 
 conda activate MADRe_env
 ```
+
 set up the configuration (config.ini file):
 ```                                                               
 [PATHS]
@@ -21,9 +101,6 @@ predefined_db = /path/to/database.fna
 strain_species_json = ./database/taxids_species.json
 ```
 
-Recommended database is Kraken2 bacteria database - instructions on how to build it you can find in the section [Build database](#build-database).
-
-
 simple run:
 ```
 python MADRe.py --reads [path_to_the_reads] --out-folder [path_to_the_out_folder] --config config.ini
@@ -34,7 +111,11 @@ more information:
 python MADRe.py --help
 ```
 
-Information on how to run specific MADRe steps find in section [Run specific steps](#run-specific-steps).
+
+
+Recommended database is Kraken2 bacteria database - instructions on how to build it you can find under the section [Build database](#build-database).
+
+Information on how to run specific MADRe steps find under the section [Run specific steps](#run-specific-steps).
 
 ## Build database
 
@@ -65,6 +146,12 @@ MADRe is the pipeline contained of two main steps: 1) database reduction and 2) 
 
 It is possible to run those steps independently. More infromation on running can be obtained with:
 
+```
+database-reduction --help
+read-classification --help
+```
+
+installed from source:
 ```
 python src/DatabaseReduction.py --help
 python src/ReadClassification.py --help
@@ -107,7 +194,10 @@ representatives.txt - Every line represents a cluster representative reference o
 ## Abundance calculation
 
 For abundance calculation information run:
-
+```
+calculate-abundances --help
+```
+installed from source:
 ```
 python src/CalculateAbundances.py --help
 ```
@@ -116,4 +206,10 @@ The input to this step is read classification output file that has lines as ```r
 The default output is rc_abundances.out containing read count abundances. If you want to calculate abundance as sum_of_read_lengths/reference_length you need to provide database path used in read classification step using ```--db``` - be aware that this step if database is big takes a little bit longer than calculation of just read count abundances. 
 
 If you want to calculate cluster abundances, you need to provide path to the directory containing ```clusters.txt``` and ```representatives.txt``` files. In that case output files will contain only represetative references with sumarized abundances for cluster that reference is represetative of.
+
+## Citing MADRe
+bioRxiv preprint - https://www.biorxiv.org/content/10.1101/2025.05.12.653324v1:
+```
+Lipovac, J., Sikic, M., Vicedomini, R., & Krizanovic, K. (2025). MADRe: Strain-Level Metagenomic Classification Through Assembly-Driven Database Reduction. bioRxiv, 2025-05.
+```
 
