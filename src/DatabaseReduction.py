@@ -1,9 +1,7 @@
 import argparse
-import sys
 import subprocess
 import logging
 import json
-from pathlib import Path
 
 CLEAN_THRESHOLD = {'less-strict':0.9,'strict':0.99, 'very-strict':0.999} 
 MIN_CONTIG_LEN = 1000
