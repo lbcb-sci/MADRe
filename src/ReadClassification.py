@@ -1,7 +1,6 @@
 import argparse
 import logging
 import json
-from pathlib import Path
 import random
 import numpy as np
 from sklearn.cluster import DBSCAN
