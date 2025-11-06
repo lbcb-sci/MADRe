@@ -41,14 +41,14 @@ def main():
     parser.add_argument("--strictness", type=str, default="very-strict", choices=["less-strict", "strict", "very-strict"], help="Database reduction strictness level. (default=very-strict)")
     parser.add_argument("--collapsed_strains_overhead", type=int, default=MAX_COLLAPSED_STRAINS_OVERHEAD, help="Overhead for collapsed strains during database reduction. (default=" + str(MAX_COLLAPSED_STRAINS_OVERHEAD) + ")")
     parser.add_argument("--min_contig_len", type=int, default=MIN_CONTIG_LEN, help="Minimum contig length for database reduction. (default=" + str(MIN_CONTIG_LEN) + ")")
-    parser.add_argument("--use-myloasm", type=bool, default=False, help="Use Myloasm assembler tool instead of metaFlye/metaMDBG. (default=False)")
+    parser.add_argument("--use-myloasm", action='store_true', help="Use Myloasm assembler instead of metaFlye/metaMDBG.")
 
     args = parser.parse_args()
 
     logging.info("Starting MADRe...")
     logging.info(f"Configuration: {args.config}")
 
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(inline_comment_prefixes=('#',))
     config.read(args.config)
 
     PATH_METAFLYE = config["PATHS"]["metaflye"]

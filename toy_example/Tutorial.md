@@ -22,7 +22,7 @@ strain_species_json = MADRe/database/taxids_species.json
 For more information about MADRe’s pipeline parameters:
 ```
 $ madre --help
-usage: madre [-h] [--version] --out-folder OUT_FOLDER --reads READS [--reads_flag {pacbio,hifi,ont}] [--threads THREADS] [-F] [--config CONFIG] [--strictness {less-strict,strict,very-strict}] [--collapsed_strains_overhead COLLAPSED_STRAINS_OVERHEAD] [--min_contig_len MIN_CONTIG_LEN]
+usage: madre [-h] [--version] --out-folder OUT_FOLDER --reads READS [--reads_flag {pacbio,hifi,ont}] [--threads THREADS] [-F] [--config CONFIG] [--strictness {less-strict,strict,very-strict}] [--collapsed_strains_overhead COLLAPSED_STRAINS_OVERHEAD] [--min_contig_len MIN_CONTIG_LEN] [--use-myloasm]
 
 MADRe
 
@@ -43,14 +43,14 @@ optional arguments:
                         Overhead for collapsed strains during database reduction. (default=2)
   --min_contig_len MIN_CONTIG_LEN
                         Minimum contig length for database reduction. (default=1000)
-  --use-myloasm USE_MYLOASM
-                        Use Myloasm assembler tool instead of metaFlye/metaMDBG. (default=False)
+  --use-myloasm         Use Myloasm assembler instead of metaFlye/metaMDBG.
+
 ```
 
 Once the `config.ini` file is ready, you can run the full pipeline with:
 
 ```
-$ madre --out-folder MADRe_toy_example --reads sim_small.fastq.gz --reads_flag ont --threads 32 --config.ini ./config.ini --strictness very-strict --collapsed_strains_overhead 2 --min_contig_len 1000 --use_myloasm False
+$ madre --out-folder MADRe_toy_example --reads sim_small.fastq.gz --reads_flag ont --threads 32 --config ./config.ini --strictness very-strict --collapsed_strains_overhead 2 --min_contig_len 1000
 ```
 
 Detailed information about additional MADRe parameters can be found in the [Additional parameters information](#additional-parameters-information) section.

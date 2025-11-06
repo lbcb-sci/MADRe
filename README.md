@@ -7,6 +7,14 @@
 
 Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction approach
 
++ [Why MADRe?](#why-madre)
++ [Installation](#installation)
++ [Build database](#build-database)
++ [How to run MADRe?](#how-to-run-madre)
++ [Run specific steps](#run-specific-steps)
++ [Abundance calculation](#abundance-calculation)
++ [Citing MADRe](#citing-madre)
+
 ## Why MADRe?
 
 **MADRe (Metagenomic Assembly-Driven Database Reduction)** is designed for metagenomic analyses where there is **no prior knowledge about the sample composition** and the starting database is **large and diverse**, containing thousands of species and strains.
@@ -29,7 +37,7 @@ Use MADRe when working with:
 
 MADRe is particularly useful as a **first-pass classification tool** for large, uncharacterized metagenomic datasets, providing a computationally efficient and biologically meaningful starting point for deeper strain-level analysis.
 
-## Instalation
+## Installation
 
 ### OPTION 1 : Conda
 
@@ -60,6 +68,7 @@ more information:
 ```
 madre --help
 ```
+
 ### OPTION 2: Running from source
 
 ```
@@ -109,16 +118,15 @@ more information:
 python MADRe.py --help
 ```
 
-
-
-Recommended database is Kraken2 bacteria database - instructions on how to build it you can find under the section [Build database](#build-database).
+The recommended database is Kraken2 bacteria database - instructions on how to build it you can find under the section [Build database](#build-database).
 
 Information on how to run specific MADRe steps find under the section [Run specific steps](#run-specific-steps).
+</details>
 
 ## Build database
 
 ### Recommended database (kraken2 built database)
-Recommend database is the kraken2 built bacteria database following next steps:
+The recommend database is the kraken2 built bacteria database following next steps:
 ```
 kraken2-build --download-taxonomy --db $DBNAME
 kraken2-build --download-library bacteria --db $DBNAME
@@ -156,7 +164,7 @@ MADRe for species-level classification step uses taxids index. For building new 
 
 ## How to run MADRe?
 
-This README contains basic information on how to run MADRe pipeline. However, **for more detailed tuorial check [toy_example/Tutorial.md](https://github.com/lbcb-sci/MADRe/blob/main/toy_example/Tutorial.md) file**.
+This README contains basic information on how to run MADRe pipeline. However, **for a more detailed tuorial check [toy_example/Tutorial.md](https://github.com/lbcb-sci/MADRe/blob/main/toy_example/Tutorial.md) file**.
 
 ## Run specific steps
 
@@ -226,7 +234,7 @@ The default output is rc_abundances.out containing read count abundances. If you
 If you want to calculate cluster abundances, you need to provide path to the directory containing ```clusters.txt``` and ```representatives.txt``` files. In that case output files will contain only represetative references with sumarized abundances for cluster that reference is represetative of.
 
 ## Citing MADRe
-bioRxiv preprint - https://www.biorxiv.org/content/10.1101/2025.05.12.653324v1:
+bioRxiv preprint - https://www.biorxiv.org/content/10.1101/2025.05.12.653324:
 ```
 Lipovac, J., Sikic, M., Vicedomini, R., & Krizanovic, K. (2025). MADRe: Strain-Level Metagenomic Classification Through Assembly-Driven Database Reduction. bioRxiv, 2025-05.
 ```
