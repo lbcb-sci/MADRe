@@ -50,8 +50,13 @@ optional arguments:
 Once the `config.ini` file is ready, you can run the full pipeline with:
 
 ```
-$ madre --out-folder MADRe_toy_example --reads sim_small.fastq.gz --reads_flag ont --threads 32 --config ./config.ini --strictness very-strict --collapsed_strains_overhead 2 --min_contig_len 1000
+$ madre --out-folder MADRe_toy_example --reads sim_small.fastq.gz --reads_flag ont --threads 32 --config ./config.ini
 ```
+
+**Note:**  
+If you set the `--reads_flag` parameter to `ont`, MADRe will use **metaFlye** as the assembler.  
+If you set it to `pacbio` or `hifi`, MADRe will use **metaMDBG** by default.  
+If you additionally specify `--use-myloasm True`, MADRe will use **Myloasm** regardless of the `--reads_flag` value.
 
 Detailed information about additional MADRe parameters can be found in the [Additional parameters information](#additional-parameters-information) section.
 
@@ -141,7 +146,7 @@ $grep '^>' hairsplitter_out_dir/tmp/cleaned_assembly.fasta | sed 's/^>//; s/@/:/
 Once `assembly.to_big_db.paf` and `collapsed_strains.txt` are generated, the *Database Reduction* step can be executed:
 
 ```
-$ database-reduction --database db.fa.gz --strain_species_info MADRe/database/taxids_species.json --paf_path assembly.to_big_db.paf --num_collapsed_strains collapsed_strains.txt --reduced_list_txt reduced_list.txt --reduced_db reduced_db.fa --threads 32 --strictness very-strict --min_contig_len 1000 --collapsed_strains_overhead 2
+$ database-reduction --database db.fa.gz --strain_species_info MADRe/database/taxids_species.json --paf_path assembly.to_big_db.paf --num_collapsed_strains collapsed_strains.txt --reduced_list_txt reduced_list.txt --reduced_db reduced_db.fa --threads 32
 ```
 
 Output files are described in the section [Run the whole MADRe pipeline – Outputs](#outputs).  

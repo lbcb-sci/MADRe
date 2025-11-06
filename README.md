@@ -69,6 +69,7 @@ more information:
 madre --help
 ```
 
+
 ### OPTION 2: Running from source
 
 ```
@@ -123,6 +124,19 @@ The recommended database is Kraken2 bacteria database - instructions on how to b
 Information on how to run specific MADRe steps find under the section [Run specific steps](#run-specific-steps).
 </details>
 
+**Note:**  
+If you set the `--reads_flag` parameter to `ont`, MADRe will use **metaFlye** as the assembler.  
+If you set it to `pacbio` or `hifi`, MADRe will use **metaMDBG** by default.  
+If you additionally specify `--use-myloasm True`, MADRe will use **Myloasm** regardless of the `--reads_flag` value.
+
+**MAIN OUTPUT FILES**
+
+``` read_classification.out ``` - Each row represents the classification result for one read: `read_id : genome_id`.
+
+``` rc_abundances.out ``` - Each row represents the read count for a genome ID: `genome_id : read_count`.
+
+``` abundances.out ``` - Each row represents abundance information for one genome ID: `genome_id : abundance`.
+
 ## Build database
 
 ### Recommended database (kraken2 built database)
@@ -132,6 +146,8 @@ kraken2-build --download-taxonomy --db $DBNAME
 kraken2-build --download-library bacteria --db $DBNAME
 kraken2-build --build --db $DBNAME
 ```
+
+Once the database is built, the path to `library.fna` should be specified in the `config.ini` file.
 
 Detailed instructions that are including the one listed here can be found at [kraken2 github page](https://github.com/DerrickWood/kraken2/blob/master/docs/MANUAL.markdown).
 
