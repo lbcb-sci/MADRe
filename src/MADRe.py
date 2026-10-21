@@ -462,7 +462,8 @@ def read_merged(path):
     if not os.path.exists(path):
         return {}
     with open(path) as handle:
-        return {old: new for old, new, *_ in (line.replace("\t|", "").split() for line in handle)}
+        # lines without both taxids (e.g. an empty merged.dmp of a converted taxonomy) are skipped
+        return {f[0]: f[1] for f in (line.replace("\t|", "").split() for line in handle) if len(f) >= 2}
 
 
 def write_strain_species_json(reference_genome_map, nodes, path):

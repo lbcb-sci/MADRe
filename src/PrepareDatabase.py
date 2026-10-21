@@ -77,7 +77,8 @@ def check_taxonomy(taxids, nodes):
         return
     parents, ranks = read_taxonomy(nodes)
     merged_path = Path(nodes).resolve().parent / 'merged.dmp'
-    merged = {old: new for old, new, *_ in (line.replace('\t|', '').split() for line in open(merged_path))} if merged_path.exists() else {}
+    # lines without both taxids (e.g. an empty merged.dmp of a converted taxonomy) are skipped
+    merged = {f[0]: f[1] for f in (line.replace('\t|', '').split() for line in open(merged_path)) if len(f) >= 2} if merged_path.exists() else {}
     n_merged = sum(1 for t in taxids if t not in parents and merged.get(t) in parents)
     if n_merged:
         logging.info(f'{n_merged} taxids were merged into newer taxids (merged.dmp); their species is taken from the newer taxid')
