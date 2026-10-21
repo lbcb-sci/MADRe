@@ -1,0 +1,3 @@
+species_or_group	read_count	assigned_bases	denominator_length	genome_equivalent_signal	relative_abundance	num_references	references	mapped_genome_signal	unresolved_assigned_bases	unresolved_reference_count	representative_genome_length	estimated_genome_signal	estimated_signal_fraction
+1328	3037	45903236	3788040	24.384685	59.671335	2	kraken:taxid|1671923|NZ_CP085939.1,kraken:taxid|862970|NC_022244.1	24.384685113623586	0	0	0	0.0	0.0
+446660	3182	48001859	5792517	16.480305	40.328665	2	kraken:taxid|1384484|NC_022567.1,kraken:taxid|394340|NZ_AP024470.1	16.48030500904393	0	0	0	0.0	0.0

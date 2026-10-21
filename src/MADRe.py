@@ -1,205 +1,1022 @@
-import os
-import logging
+#!/usr/bin/env python3
+
 import argparse
-from argparse import Namespace
 import configparser
-from pathlib import Path
-import DatabaseReduction
-import ReadClassification
+import json
+import logging
+import os
+import re
+import shlex
+import subprocess
+from argparse import Namespace
+from NovelPlacement import ancestor, read_taxonomy
+
+# MADRe pipeline:
+#   1 assembly (metaFlye / metaMDBG / Myloasm), or given contigs (--assembly)
+#   2 assembly contigs mapped to the full reference database
+#   3 collapsed strains per contig (HairSplitter)
+#   4 contig classification (KNOWN / UNCERTAIN / NOVEL_CANDIDATE) and the
+#     reduced database, selected as whole genomes (DatabaseReduction,
+#     needs --reference_genome_map)
+#   5 grouping of UNCERTAIN / novel contigs (NovelDetection)
+#   6 extended database = reduced database + UNCERTAIN / novel contigs
+#     (+ host reference)
+#   7 reads mapped to the extended database
+#   8 StrainRefine: novel-contig placement in the taxonomy (on by
+#     default, needs --nodes/--names; --no-novel-placement turns it off), read
+#     assignment, strain clustering
+#   9 CalculateAbundances: abundance, species summary and taxonomic profile
+# --min-abundance leaves species below it out of the final taxonomic profile.
+# --nodes/--names are used by steps 8 and 9 only; step 5 runs without taxonomy.
 import CalculateAbundances
+import DatabaseReduction as DR
+import NovelDetection
+import StrainRefine
+
+
+# =============================================================================
+# Defaults
+# =============================================================================
+
+# Shown when --reference_genome_map is missing.
+REFERENCE_GENOME_MAP_EXAMPLE = """\
+Expected: a tab-separated file with a header line and one row per sequence of
+the reference database. genome_id groups the sequences of one genome (e.g. an
+assembly accession); genome_length is that whole genome's length in bp (sum
+of all its sequences), repeated on each of its rows. Example:
+
+reference\tgenome_id\tgenome_length
+|1000373|NC_016757.1\tGCF_000895895.1\t17078
+|1000373|NC_016758.1\tGCF_000895895.1\t17078
+|562|NZ_CM137271.1\tGCF_049197725.1\t5411416
+
+The reference column must match the database FASTA headers exactly
+(the text after '>' up to the first space)."""
 
 MIN_CONTIG_LEN = 1000
 MAX_COLLAPSED_STRAINS_OVERHEAD = 2
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
+DEFAULT_KNOWN_THR = 0.75
+DEFAULT_NOVEL_THR = 0.35
 
-def run_or_skip(cmd, target_file, force=False):
-    if os.path.exists(target_file) and not force:
-        logging.info(f"Skipping step (file exists): {target_file}")
+DEFAULT_CLUSTER_EPS = 0.8
+DEFAULT_HIGH_SCORE_THRESHOLD = 0.6
+DEFAULT_MIN_HIGH_SCORE_READS = 5
+DEFAULT_MID_HIGH_SCORE_READS = 10
+DEFAULT_MIN_HIGH_SCORE_FRACTION = 0.8
+DEFAULT_SPECIES_MIN_READ_COUNT = 5
+DEFAULT_SPECIES_MIN_MEAN_SCORE = 0.6
+DEFAULT_SPECIES_LOW_COUNT_CAP = 30
+
+
+# =============================================================================
+# Logging
+# =============================================================================
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()])
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+
+def run_command(cmd, target_file=None, force=False, stderr_path=None):
+    """
+    Run an external command unless target_file already exists.
+
+    cmd must be a list.
+    """
+
+    if target_file is not None and os.path.exists(target_file) and not force:
+        logging.info("Skipping step because output already exists: %s", target_file)
         return
 
-    logging.info(f"Running: {cmd}")
-    os.system(cmd)
-    if not os.path.exists(target_file):
-        logging.error(f"The command was not executed successfully. Exiting...")
-        exit()
+    logging.info("Running: %s", " ".join(shlex.quote(str(x)) for x in cmd))
 
-def main():
-    parser = argparse.ArgumentParser(description="MADRe")
+    stderr_handle = None
 
-    parser.add_argument("--version", action="version", version="MADRe v.0.0.5")
-    parser.add_argument("--out-folder", type=str, required=True, help="Path to the output folder.")
-    parser.add_argument("--reads", type=str, required=True, help="Path to the reads file (fastq/fq can be gzipped).")
-    parser.add_argument("--reads_flag", type=str, default='ont', choices=['pacbio', 'hifi', 'ont'], help="Reads technology. (default=ont)")
-    parser.add_argument("--threads", type=int, default=32, help="Number of threads (default=32).")
-    parser.add_argument("-F", "--force", action="store_true", help="Force rerun all steps.")
-    parser.add_argument("--config", type=str, default="config.ini", help="Path to the configuration file. (default=./config.ini)")
-    parser.add_argument("--strictness", type=str, default="very-strict", choices=["less-strict", "strict", "very-strict"], help="Database reduction strictness level. (default=very-strict)")
-    parser.add_argument("--collapsed_strains_overhead", type=int, default=MAX_COLLAPSED_STRAINS_OVERHEAD, help="Overhead for collapsed strains during database reduction. (default=" + str(MAX_COLLAPSED_STRAINS_OVERHEAD) + ")")
-    parser.add_argument("--min_contig_len", type=int, default=MIN_CONTIG_LEN, help="Minimum contig length for database reduction. (default=" + str(MIN_CONTIG_LEN) + ")")
-    parser.add_argument("--use-myloasm", action='store_true', help="Use Myloasm assembler instead of metaFlye/metaMDBG.")
+    try:
+        if stderr_path:
+            stderr_handle = open(stderr_path, "w")
 
-    args = parser.parse_args()
+        subprocess.run(cmd, check=True, stderr=stderr_handle)
 
-    logging.info("Starting MADRe...")
-    logging.info(f"Configuration: {args.config}")
+    finally:
+        if stderr_handle:
+            stderr_handle.close()
 
-    config = configparser.ConfigParser(inline_comment_prefixes=('#',))
-    config.read(args.config)
+    if target_file is not None and not os.path.exists(target_file):
+        raise RuntimeError("Command completed but expected output " f"was not created: {target_file}")
 
-    PATH_METAFLYE = config["PATHS"]["metaflye"]
-    PATH_METAMDBG = config["PATHS"]["metaMDBG"]
-    PATH_MINIMAP = config["PATHS"]["minimap"]
-    PATH_HAIRSPLITTER = config["PATHS"]["hairsplitter"]
+
+def run_command_stdout(cmd, output_path, force=False, stderr_path=None):
+    """
+    Run a command and redirect stdout to output_path.
+
+    Output is written to output_path + ".tmp" and renamed to output_path only
+    after the command finished successfully, so an interrupted or failed run
+    never leaves a partial file that a later run would take as finished.
+    """
+
+    if os.path.exists(output_path) and not force:
+        logging.info("Skipping step because output already exists: %s", output_path)
+        return
+
+    logging.info("Running: %s > %s", " ".join(shlex.quote(str(x)) for x in cmd), output_path)
+
+    stderr_handle = None
+    tmp_path = str(output_path) + ".tmp"
+
+    try:
+        if stderr_path:
+            stderr_handle = open(stderr_path, "w")
+
+        with open(tmp_path, "w") as stdout_handle:
+
+            subprocess.run(cmd, stdout=stdout_handle, stderr=stderr_handle, check=True)
+
+        os.replace(tmp_path, output_path)
+
+    finally:
+        if stderr_handle:
+            stderr_handle.close()
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    if not os.path.exists(output_path):
+        raise RuntimeError(f"Expected output was not created: {output_path}")
+
+
+def concatenate_fastas(input_fastas, output_path, force=False):
+    """
+    Concatenate uncompressed FASTA files (written to output_path + ".tmp"
+    and renamed when complete, so an interrupted run leaves no partial file).
+    """
+
+    if os.path.exists(output_path) and not force:
+        logging.info("Skipping extended DB construction because " "output already exists: %s", output_path)
+        return
+
+    logging.info("Building extended database: %s", output_path)
+
+    tmp_path = str(output_path) + ".tmp"
+
+    with open(tmp_path, "w") as out:
+
+        for fasta in input_fastas:
+
+            require_file(fasta, "Input FASTA")
+
+            logging.info("  Adding %s", fasta)
+
+            with open(fasta) as inp:
+                for line in inp:
+                    out.write(line)
+
+    os.replace(tmp_path, output_path)
+
+    if not os.path.exists(output_path):
+        raise RuntimeError(f"Failed to create extended database: {output_path}")
+
+
+HOST_PREFIX = "HOST_"
+
+
+def prepare_host_reference(host_fasta, host_name, out_folder, force=False):
+    """
+    Write the host reference with MADRe host headers:
+
+        >HOST|HOST_<name>|<original id> <original description>
+
+    StrainRefine uses the field after the first '|' as the reference id, so
+    every host sequence shares the id HOST_<name>, which is registered as its
+    own group in the extended strain-species JSON (reads assigned to it are
+    counted as host, never as a taxon). Accepts plain or gzipped FASTA.
+    Returns (path to rewritten FASTA, host group id).
+    """
+    require_file(host_fasta, "Host reference FASTA")
+    safe = "".join(c if c.isalnum() else "_" for c in host_name).strip("_") or "host"
+    group_id = HOST_PREFIX + safe
+    out_path = os.path.join(out_folder, f"host_reference.{safe}.fa")
+    if os.path.exists(out_path) and not force:
+        logging.info("Host reference already prepared: %s", out_path)
+        return out_path, group_id
+
+    import gzip
+
+    opener = gzip.open if str(host_fasta).endswith(".gz") else open
+    n_seq = 0
+    tmp_path = out_path + ".tmp"
+    with opener(host_fasta, "rt") as inp, open(tmp_path, "w") as out:
+        for line in inp:
+            if line.startswith(">"):
+                seq_id, _, desc = line[1:].rstrip("\n").partition(" ")
+                seq_id = seq_id.replace("|", "_")
+                out.write(f">HOST|{group_id}|{seq_id}" + (f" {desc}" if desc else "") + "\n")
+                n_seq += 1
+            else:
+                out.write(line)
+    if n_seq == 0:
+        os.remove(tmp_path)
+        raise RuntimeError(f"No FASTA records found in host reference: {host_fasta}")
+    os.replace(tmp_path, out_path)
+    logging.info("Host reference: %d sequences from %s -> %s (group %s)", n_seq, host_fasta, out_path, group_id)
+    return out_path, group_id
+
+
+def file_sha256(path):
+    """SHA-256 of a file's content (to tell whether an input changed between runs)."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def require_file(path, description):
+    """
+    Check that a required file exists.
+    """
+
+    if path is None:
+        raise FileNotFoundError(f"{description} was not provided.")
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{description} does not exist: {path}")
+
+
+# =============================================================================
+# Assembly
+# =============================================================================
+
+
+METAMDBG_GRAPH_K = 21
+
+
+def metamdbg_graph(path_metamdbg, assembly_dir, threads, force, log_path):
+    """
+    Build metaMDBG's assembly graph ("metaMDBG gfa") for contig links in step 5.
+
+    Uses k = METAMDBG_GRAPH_K (every contig has a path there), or the smallest available k.
+    Keeps the graph without sequences and the contig -> unitig table; the graph with
+    sequences is removed. Returns (gfa, contig_paths), or (None, None) if it fails.
+    """
+    listing = subprocess.run([path_metamdbg, "gfa", "--assembly-dir", assembly_dir, "--k", "0"], capture_output=True, text=True)
+    available = [int(k) for k in re.findall(r"^\s*-\s*(\d+)\s*\(", listing.stdout + listing.stderr, flags=re.M)]
+    if not available:
+        logging.warning("metaMDBG gfa: no k values available; step 5 runs without assembly-graph links.")
+        return None, None
+    k = METAMDBG_GRAPH_K if METAMDBG_GRAPH_K in available else min(available)
+    gfa = os.path.join(assembly_dir, f"assemblyGraph_k{k}.noseq.gfa")
+    contig_paths = os.path.join(assembly_dir, f"assemblyGraph_k{k}_contigPath.tsv")
+    if force or not (os.path.exists(gfa) and os.path.exists(contig_paths)):
+        logging.info("Building metaMDBG assembly graph (k=%d)", k)
+        with open(log_path, "a") as log:
+            result = subprocess.run([path_metamdbg, "gfa", "--assembly-dir", assembly_dir, "--k", str(k), "--threads", str(threads)], stdout=log, stderr=log)
+        if result.returncode != 0 or not (os.path.exists(gfa) and os.path.exists(contig_paths)):
+            logging.warning("metaMDBG gfa failed; step 5 runs without assembly-graph links (see %s).", log_path)
+            return None, None
+        with_sequences = os.path.join(assembly_dir, f"assemblyGraph_k{k}.gfa")
+        if os.path.exists(with_sequences):
+            os.remove(with_sequences)
+    return gfa, contig_paths
+
+
+def run_assembly(args, path_metaflye, path_metamdbg, path_myloasm):
+    """
+    Run assembly.
+
+    With --assembly, the given contigs are used instead (copied, or decompressed, to
+    <out>/external_assembly/assembly.fasta); there is no assembly graph or coverage, so
+    novel-contig grouping (step 5) runs without graph links.
+
+    Returns
+    -------
+    dict
+        output_dir
+        assembly
+        assembler      metaflye / myloasm / metamdbg (None for --assembly)
+        assembly_info  metaFlye assembly_info.txt
+        gfa            assembly graph (metaFlye, Myloasm; metaMDBG without sequences)
+        contig_paths   metaMDBG contig -> unitig table
+    """
+
+    reads_tech_flye = {"pacbio": "--pacbio-raw", "hifi": "--pacbio-hifi", "ont": "--nano-raw"}
+
+    assembly_info = None
+    assembly_gfa = None
+    contig_paths = None
+
+    if args.assembly:
+        assembly_out_dir = os.path.join(args.out_folder, "external_assembly")
+        assembly_fasta = os.path.join(assembly_out_dir, "assembly.fasta")
+        if not os.path.exists(assembly_fasta) or args.force:
+            import gzip
+            import shutil
+
+            require_file(args.assembly, "Given assembly (--assembly)")
+            os.makedirs(assembly_out_dir, exist_ok=True)
+            opener = gzip.open if args.assembly.endswith(".gz") else open
+            with opener(args.assembly, "rb") as fin, open(assembly_fasta + ".tmp", "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+            os.replace(assembly_fasta + ".tmp", assembly_fasta)
+            logging.info("Using the given contigs instead of an assembly: %s -> %s", args.assembly, assembly_fasta)
+        return {"output_dir": assembly_out_dir, "assembly": assembly_fasta, "assembler": None, "assembly_info": None, "gfa": None, "contig_paths": None}
+
+    # Output folder, log name and assembler input option per read type.
+    myloasm_setup = {"ont": ("myloasm_ont", []), "hifi": ("myloasm_hifi", ["--hifi"])}
+    metamdbg_setup = {"ont": ("metaMDBG_ont", "--in-ont", "metaMDBG_ont.log"), "hifi": ("metaMDBG", "--in-hifi", "metaMDBG.log")}
+
+    # =========================================================================
+    # Myloasm (ONT or HiFi, only with --use-myloasm)
+    # =========================================================================
 
     if args.use_myloasm:
+
+        if not path_myloasm:
+            raise ValueError("--use-myloasm was provided but myloasm " "is not defined in config.ini")
+
+        if args.reads_flag not in myloasm_setup:
+            raise ValueError("Myloasm currently supports ONT and HiFi " "in MADRe.")
+
+        folder, extra = myloasm_setup[args.reads_flag]
+
+        assembler = "myloasm"
+
+        assembly_out_dir = os.path.join(args.out_folder, folder)
+
+        assembly_fasta = os.path.join(assembly_out_dir, "assembly.fasta")
+
+        if not os.path.exists(assembly_fasta) or args.force:
+
+            os.makedirs(assembly_out_dir, exist_ok=True)
+
+            command = (
+                f"{shlex.quote(path_myloasm)} "
+                f"--output-dir "
+                f"{shlex.quote(assembly_out_dir)} "
+                f"--threads {args.threads} " + "".join(f"{x} " for x in extra) + f"{shlex.quote(args.reads)} "
+                f"2> "
+                f"{shlex.quote(os.path.join(args.out_folder, 'myloasm.log'))} "
+                f"&& cat "
+                f"{shlex.quote(os.path.join(assembly_out_dir, 'assembly_primary.fa'))} "
+                f"{shlex.quote(os.path.join(assembly_out_dir, 'alternate_assemblies', 'assembly_alternate.fa'))} "
+                f"> {shlex.quote(assembly_fasta)}"
+            )
+
+            logging.info("Running Myloasm (primary + alternate contigs)")
+
+            subprocess.run(command, shell=True, check=True)
+
+        candidate_gfa = os.path.join(assembly_out_dir, "final_contig_graph.gfa")
+
+        if os.path.exists(candidate_gfa):
+            assembly_gfa = candidate_gfa
+
+    # =========================================================================
+    # metaMDBG: default for HiFi; for ONT only with --use-metamdbg
+    # =========================================================================
+
+    elif args.reads_flag == "hifi" or (args.use_metamdbg and args.reads_flag == "ont"):
+
+        folder, input_option, log_name = metamdbg_setup[args.reads_flag]
+
+        assembler = "metamdbg"
+
+        assembly_out_dir = os.path.join(args.out_folder, folder)
+
+        assembly_fasta = os.path.join(assembly_out_dir, "assembly.fasta")
+
+        if not os.path.exists(assembly_fasta) or args.force:
+
+            os.makedirs(assembly_out_dir, exist_ok=True)
+
+            cmd = [path_metamdbg, "asm", "--out-dir", assembly_out_dir, input_option, args.reads, "--threads", str(args.threads)]
+
+            run_command(cmd, force=True, stderr_path=os.path.join(args.out_folder, log_name))
+
+            compressed = os.path.join(assembly_out_dir, "contigs.fasta.gz")
+
+            require_file(compressed, "metaMDBG contigs")
+
+            cmd = ["gzip", "-dc", compressed]
+
+            run_command_stdout(cmd, assembly_fasta, force=True)
+
+        assembly_gfa, contig_paths = metamdbg_graph(path_metamdbg, assembly_out_dir, args.threads, args.force, os.path.join(args.out_folder, log_name))
+
+    # =========================================================================
+    # metaFlye: default for ONT
+    # =========================================================================
+
+    elif args.reads_flag == "ont":
+
+        assembler = "metaflye"
+
+        assembly_out_dir = os.path.join(args.out_folder, "metaflye")
+
+        assembly_fasta = os.path.join(assembly_out_dir, "assembly.fasta")
+
+        os.makedirs(assembly_out_dir, exist_ok=True)
+
+        cmd = [path_metaflye, reads_tech_flye[args.reads_flag], args.reads, "--out-dir", assembly_out_dir, "--threads", str(args.threads), "--meta"]
+
+        run_command(cmd, target_file=assembly_fasta, force=args.force, stderr_path=os.path.join(args.out_folder, "metaflye.log"))
+
+        candidate_info = os.path.join(assembly_out_dir, "assembly_info.txt")
+
+        candidate_gfa = os.path.join(assembly_out_dir, "assembly_graph.gfa")
+
+        if os.path.exists(candidate_info):
+            assembly_info = candidate_info
+
+        if os.path.exists(candidate_gfa):
+            assembly_gfa = candidate_gfa
+
+    else:
+
+        raise ValueError("PacBio raw-read assembly is not currently " "implemented in MADRe.")
+
+    require_file(assembly_fasta, "Assembly FASTA")
+
+    return {
+        "output_dir": assembly_out_dir,
+        "assembly": assembly_fasta,
+        "assembler": assembler,
+        "assembly_info": assembly_info,
+        "gfa": assembly_gfa,
+        "contig_paths": contig_paths,
+    }
+
+
+# =============================================================================
+# Main pipeline
+# =============================================================================
+
+
+def read_merged(path):
+    """merged.dmp (old taxid -> current taxid); {} if the file does not exist."""
+    if not os.path.exists(path):
+        return {}
+    with open(path) as handle:
+        return {old: new for old, new, *_ in (line.replace("\t|", "").split() for line in handle)}
+
+
+def write_strain_species_json(reference_genome_map, nodes, path):
+    """
+    Species of every database taxid, from the taxonomy: {taxid: species taxid}, written to path (JSON) for steps 4-8.
+    Taxids are the second '|' field of the genome map's references ('|562|NC_000913.3', 'kraken:taxid|562|...').
+    A taxid at or above species rank maps to itself. A taxid missing from nodes.dmp is looked up under its new taxid in
+    merged.dmp (next to nodes.dmp, if present); one found in neither maps to itself (with a warning).
+    """
+    taxids = set()
+    with open(reference_genome_map) as handle:
+        next(handle)
+        for line in handle:
+            parts = line.split("\t", 1)[0].split("|")
+            if len(parts) >= 3 and parts[1]:
+                taxids.add(parts[1])
+    parents, ranks = read_taxonomy(nodes)
+    merged = read_merged(os.path.join(os.path.dirname(os.path.abspath(nodes)), "merged.dmp"))
+    current = {t: (t if t in parents else merged.get(t, t)) for t in taxids}
+    n_merged = sum(1 for t in taxids if t not in parents and current[t] in parents)
+    if n_merged:
+        logging.info("%d database taxids were merged into newer taxids (merged.dmp); their species are taken from the newer taxid", n_merged)
+    missing = sorted(t for t in taxids if current[t] not in parents)
+    if missing:
+        logging.warning("%d database taxids are not in %s and map to themselves, e.g. %s", len(missing), nodes, ", ".join(missing[:5]))
+    mapping = {t: ancestor(current[t], parents, ranks, "species") or t for t in sorted(taxids)}
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as handle:
+        json.dump(mapping, handle)
+    os.replace(tmp, path)
+    logging.info("Species of %d database taxids (%d species) from %s -> %s", len(mapping), len(set(mapping.values())), nodes, path)
+    return str(path)
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="MADRe")
+
+    # =========================================================================
+    # General
+    # =========================================================================
+
+    parser.add_argument("--version", action="version", version="MADRe 2.0.0")
+
+    parser.add_argument("--out-folder", required=True, help="Output directory.")
+
+    parser.add_argument("--reads", required=True, help=("Input reads FASTQ/FASTA; gzip allowed " "where supported."))
+
+    parser.add_argument(
+        "--assembly",
+        default=None,
+        help="Contigs (FASTA, plain or .gz) to use instead of assembling the reads: step 1 is skipped. "
+        "Without an assembly graph, novel-contig grouping runs without graph links.",
+    )
+
+    parser.add_argument("--reads_flag", default="ont", choices=["pacbio", "hifi", "ont"], help="Read technology. Default: ont")
+
+    parser.add_argument("--threads", type=int, default=32, help="Number of threads. Default: 32")
+
+    parser.add_argument("-F", "--force", action="store_true", help=("Rerun external steps even if outputs " "already exist."))
+
+    parser.add_argument("--config", default="config.ini", help="Path to config.ini.")
+
+    parser.add_argument("--strictness", default="very-strict", choices=["less-strict", "strict", "very-strict"])
+
+    parser.add_argument("--collapsed_strains_overhead", type=int, default=MAX_COLLAPSED_STRAINS_OVERHEAD)
+
+    parser.add_argument("--min_contig_len", type=int, default=MIN_CONTIG_LEN)
+
+    parser.add_argument("--known_thr", type=float, default=DEFAULT_KNOWN_THR, help=("vcig_norm >= this value -> KNOWN."))
+
+    parser.add_argument("--novel_thr", type=float, default=DEFAULT_NOVEL_THR, help=("vcig_norm < this value -> NOVEL_CANDIDATE."))
+    parser.add_argument(
+        "--novelty-score",
+        choices=["summed", "union"],
+        default="union",
+        help="Contig novelty score: summed = vcig of all alignments to a reference / contig length (overlapping alignments all "
+        "counted); union = each contig base counted once, weighted by the best alignment covering it "
+        "(union sets only the KNOWN/UNCERTAIN/NOVEL label; the best reference is chosen among the EM-selected references).",
+    )
+
+    # MAPQ=0 assembly-to-reference mappings are included by default (no MAPQ
+    # filter); --mapq-filter excludes them. --no-mapq-filter states the default.
+    parser.add_argument(
+        "--no-mapq-filter",
+        dest="no_mapq_filter",
+        action="store_true",
+        help=(
+            "Include MAPQ=0 assembly-to-reference mappings during database " "reduction and novelty scoring (default; the option only makes " "it explicit)."
+        ),
+    )
+    parser.add_argument(
+        "--mapq-filter",
+        dest="no_mapq_filter",
+        action="store_false",
+        help=("Exclude MAPQ=0 assembly-to-reference mappings during database " "reduction and novelty scoring."),
+    )
+    parser.set_defaults(no_mapq_filter=True)
+
+    parser.add_argument("--use-myloasm", action="store_true")
+
+    parser.add_argument(
+        "--use-metamdbg",
+        action="store_true",
+        help=(
+            "Assemble ONT reads with metaMDBG (--in-ont) instead of "
+            "metaFlye. Only affects --reads_flag ont; metaMDBG already "
+            "handles hifi unconditionally."
+        ),
+    )
+
+    # =========================================================================
+    # Taxonomy used by optional family grouping
+    # =========================================================================
+
+    taxonomy = parser.add_argument_group("Taxonomy")
+
+    taxonomy.add_argument("--nodes", required=True, help="Taxonomy nodes.dmp (NCBI format, e.g. NCBI or GTDB in NCBI format), the version used for the database. Gives the species of every reference and is used for novel-contig placement.")
+
+    taxonomy.add_argument("--names", required=True, help="Taxonomy names.dmp matching --nodes.")
+
+    # =========================================================================
+    # Novel grouping
+    # =========================================================================
+
+    novel = parser.add_argument_group("Novel organism grouping")
+
+    novel.add_argument("--grouping-strict-overlap", type=float, default=0.80)
+
+    novel.add_argument("--grouping-strict-identity", type=float, default=0.95)
+
+    novel.add_argument("--grouping-relaxed-overlap", type=float, default=0.10)
+
+    novel.add_argument("--grouping-relaxed-identity", type=float, default=0.70)
+
+    # =========================================================================
+    # StrainRefine
+    # =========================================================================
+
+    sr = parser.add_argument_group("StrainRefine")
+
+    sr.add_argument("--cluster-eps", type=float, default=DEFAULT_CLUSTER_EPS)
+
+    sr.add_argument("--high-score-threshold", type=float, default=DEFAULT_HIGH_SCORE_THRESHOLD)
+
+    sr.add_argument("--min-high-score-reads", type=int, default=DEFAULT_MIN_HIGH_SCORE_READS)
+
+    sr.add_argument("--mid-high-score-reads", type=int, default=DEFAULT_MID_HIGH_SCORE_READS)
+
+    sr.add_argument("--min-high-score-fraction", type=float, default=DEFAULT_MIN_HIGH_SCORE_FRACTION)
+
+    sr.add_argument("--species-min-read-count", type=int, default=DEFAULT_SPECIES_MIN_READ_COUNT)
+
+    sr.add_argument("--species-min-mean-score", type=float, default=DEFAULT_SPECIES_MIN_MEAN_SCORE)
+
+    sr.add_argument("--species-low-count-cap", type=int, default=DEFAULT_SPECIES_LOW_COUNT_CAP)
+
+    parser.add_argument(
+        "--placement-report",
+        action="store_true",
+        help="Draw the per-contig placement figures in novel_placement_report/ (one PNG per novel contig with a candidate family, "
+        "and the numbers behind them in novel_contig_neighbours.tsv). Off by default: with thousands of novel contigs, drawing them "
+        "takes hours. novel_placement.tsv is always written.",
+    )
+    # earlier option (the figures used to be drawn by default); accepted for old commands, no effect
+    parser.add_argument("--no-placement-report", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--no-novel-placement",
+        action="store_true",
+        help="Do not place novel contigs in the taxonomy before StrainRefine groups reads "
+        "by species (placement is on by default and needs --nodes/--names).",
+    )
+    parser.add_argument(
+        "--keep-reduced-db",
+        action="store_true",
+        help="Keep reduced_db.fa (the selected database sequences). By default it is removed once extended_db.fa is built, "
+        "since extended_db.fa contains the same sequences; reduced_db_refs.txt lists them.",
+    )
+    parser.add_argument(
+        "--host-reference",
+        default=None,
+        help="Host reference FASTA (plain or .gz). Appended to the extended database "
+        "with headers >HOST|HOST_<name>|<id>, so reads from the host are assigned "
+        "to it and reported as host instead of being forced onto microbes or novel "
+        "contigs. Host reads are excluded from microbial relative abundance.",
+    )
+    parser.add_argument("--host-name", default="host", help="Label used in host headers and outputs (HOST_<name>), e.g. human.")
+    parser.add_argument(
+        "--min-abundance",
+        type=float,
+        default=0.0,
+        help="Leave species below this relative abundance (%%) out of strainrefine_taxonomic_profile.tsv; the complete profile is "
+        "kept as strainrefine_taxonomic_profile.all_species.tsv. Default 0 (off).",
+    )
+    parser.add_argument(
+        "--genome-depth",
+        choices=("median", "mean"),
+        default="median",
+        help="Genome copies of a known genome: 'median' (default) = min(bases / genome length, length-weighted median depth "
+        "of its sequences with reads), so reads piled on a small high-copy sequence (plasmid, repeat) do not inflate it; "
+        "'mean' = bases / genome length (the rule of earlier MADRe versions).",
+    )
+    parser.add_argument(
+        "--reference_genome_map",
+        default=None,
+        help="Required. Tab-separated table assigning every database sequence to its "
+        "genome, with the whole genome's length (sum of all its sequences), e.g.: "
+        "'reference  genome_id  genome_length' / "
+        "'|1000373|NC_016757.1  GCF_000895895.1  17078' / "
+        "'|1000373|NC_016758.1  GCF_000895895.1  17078'.",
+    )
+    args = parser.parse_args()
+    if not args.reference_genome_map:
+        parser.error(
+            "--reference_genome_map is required: the database reduction uses it to "
+            "select whole genomes, and StrainRefine uses it to pool the sequences "
+            "of a genome and to normalise abundance by genome length.\n\n" + REFERENCE_GENOME_MAP_EXAMPLE
+        )
+
+    # =========================================================================
+    # Configuration
+    # =========================================================================
+
+    logging.info("Starting MADRe...")
+
+    logging.info("Configuration: %s", args.config)
+
+    config = configparser.ConfigParser(inline_comment_prefixes=("#",))
+
+    if not config.read(args.config):
+
+        raise FileNotFoundError(f"Could not read configuration file: {args.config}")
+
+    PATH_METAFLYE = config["PATHS"]["metaflye"]
+
+    PATH_METAMDBG = config["PATHS"]["metaMDBG"]
+
+    PATH_MINIMAP = config["PATHS"]["minimap"]
+
+    PATH_HAIRSPLITTER = config["PATHS"]["hairsplitter"]
+
+    PATH_MYLOASM = None
+
+    if args.use_myloasm:
+
         PATH_MYLOASM = config["PATHS"]["myloasm"]
 
     PREDEFINED_DB = config["DATABASE"]["predefined_db"]
-    PREDEFINED_DB_JSON = Path(__file__).resolve().parent / config["DATABASE"]["strain_species_json"]
 
-    logging.info(f"Output folder: {args.out_folder}")
-    logging.info(f"Reads file: {args.reads}")
-    logging.info(f"Reads technology: {args.reads_flag}")
-    logging.info(f"Database: {PREDEFINED_DB}")
-    logging.info(f"Strain-Species JSON: {PREDEFINED_DB_JSON}")
-    logging.info(f"Threads: {args.threads}")
+    if config.has_option("DATABASE", "strain_species_json"):
 
-    if args.use_myloasm:
-        logging.info(f"Assembly step uses Myloasm.")
+        logging.warning("config.ini: strain_species_json is no longer used (species come from --nodes); ignored.")
 
-    if not os.path.exists(args.out_folder):
-        logging.info(f"Creating output folder: {args.out_folder}")
-        os.makedirs(args.out_folder)
+    # -------------------------------------------------------------------------
+    # Input checks
+    # -------------------------------------------------------------------------
 
-    reads_tech_flye = {'pacbio':'--pacbio-raw', 'hifi':'--pacbio-hifi', 'ont':'--nano-raw'}
-    reads_tech_minimap = {'pacbio':'-cx map-pb', 'hifi':'-cx map-hifi', 'ont':'-cx map-ont'}
+    require_file(args.reads, "Reads file")
 
-    if args.reads_flag == 'ont' and not args.use_myloasm:
-        assembly_out_dir = os.path.join(args.out_folder, "metaflye")
-        try:
-            logging.info("Running MetaFlye...")
-            command = f"{PATH_METAFLYE} {reads_tech_flye[args.reads_flag]} {args.reads} --out-dir {assembly_out_dir} --threads {args.threads} --meta 2> {args.out_folder}/metaflye.log"
-            run_or_skip(command, f"{assembly_out_dir}/assembly.fasta", args.force)
-        except Exception as e:
-            logging.error(f"MetaFlye error: {e}")
-            exit()
-    elif args.reads_flag == 'hifi' and not args.use_myloasm:
-        assembly_out_dir = os.path.join(args.out_folder, "metaMDBG")
-        try:
-            logging.info("Running metaMDBG...")
-            command = f"{PATH_METAMDBG} asm --out-dir {assembly_out_dir} --in-hifi {args.reads} --threads {args.threads} 2> {args.out_folder}/metaMDBG.log && gunzip {assembly_out_dir}/contigs.fasta.gz && mv {assembly_out_dir}/contigs.fasta {assembly_out_dir}/assembly.fasta"
-            run_or_skip(command, f"{assembly_out_dir}/assembly.fasta", args.force)
-        except Exception as e:
-            logging.error(f"metaMDBG error: {e}")
-            exit()
-    elif args.reads_flag == 'ont' and args.use_myloasm:
-        assembly_out_dir = os.path.join(args.out_folder, "myloasm_ont")
-        print(assembly_out_dir)
-        print(PATH_MYLOASM)
-        try:
-            logging.info("Running myloasm with ONT data...")
-            command = f"{PATH_MYLOASM} --output-dir {assembly_out_dir} --threads {args.threads} {args.reads} 2> {args.out_folder}/myloasm.log && cat {assembly_out_dir}/alternate_assemblies/*.fasta {assembly_out_dir}/assembly_primary.fa > {assembly_out_dir}/assembly.fasta"
-            run_or_skip(command, f"{assembly_out_dir}/assembly.fasta", args.force)
-        except Exception as e:
-            logging.error(f"myloasm error: {e}")
-            exit()
-    elif args.reads_flag == 'hifi' and args.use_myloasm:
-        assembly_out_dir = os.path.join(args.out_folder, "myloasm_hifi")
-        try:
-            logging.info("Running myloasm with HiFi data...")
-            command = f"{PATH_MYLOASM} --output-dir {assembly_out_dir} --threads {args.threads} --hifi {args.reads} 2> {args.out_folder}/myloasm.log && cat {assembly_out_dir}/alternate_assemblies/*.fasta {assembly_out_dir}/assembly_primary.fa > {assembly_out_dir}/assembly.fasta"
-            run_or_skip(command, f"{assembly_out_dir}/assembly.fasta", args.force)
-        except Exception as e:
-            logging.error(f"myloasm error: {e}")
-            exit()
+    require_file(PREDEFINED_DB, "Reference database")
 
-    try:
-        logging.info("Running Minimap2 for database reduction...")
-        command = f"{PATH_MINIMAP} -x asm5 {PREDEFINED_DB} {assembly_out_dir}/assembly.fasta -t {args.threads} > {args.out_folder}/assembly.to_big_db.paf 2> {args.out_folder}/minimap_reduction.log"
-        run_or_skip(command, f"{args.out_folder}/assembly.to_big_db.paf", args.force)
-    except Exception as e:
-        logging.error(f"Minimap2 reduction error: {e}")
-        exit()
+    require_file(args.nodes, "Taxonomy nodes.dmp")
 
-    try:
-        logging.info("Running Hairsplitter...")
-        hairsplitter_out_dir = os.path.join(assembly_out_dir, "hairsplitter")
-        command = f"{PATH_HAIRSPLITTER} -i {assembly_out_dir}/assembly.fasta -f {args.reads} -t {args.threads} -o {hairsplitter_out_dir} -F 2> {args.out_folder}/hairsplitter.log"
-        run_or_skip(command, f"{hairsplitter_out_dir}/tmp/cleaned_assembly.fasta", args.force)
-        os.system("rm -r tmp*")
-        os.system("rm trash.txt")
-    except Exception as e:
-        logging.error(f"Hairsplitter error: {e}")
-        exit()
+    require_file(args.names, "Taxonomy names.dmp")
 
-    try:
-        command = f"grep '^>' {hairsplitter_out_dir}/tmp/cleaned_assembly.fasta | sed 's/^>//; s/@/:/; s/edge/contig/' > {assembly_out_dir}/collapsed_strains.txt"
-        run_or_skip(command, f"{assembly_out_dir}/collapsed_strains.txt", args.force)
+    os.makedirs(args.out_folder, exist_ok=True)
 
-    except Exception as e:
-        logging.error(f"Collapsed strain processing error: {e}")
-        exit()
+    logging.info("Output folder: %s", args.out_folder)
 
-    try:
-        logging.info("Running DatabaseReduction...")
-        dr_args = Namespace(
-        database=PREDEFINED_DB,
-        strain_species_info=str(PREDEFINED_DB_JSON),
-        paf_path=f"{args.out_folder}/assembly.to_big_db.paf",
-        num_collapsed_strains=f"{assembly_out_dir}/collapsed_strains.txt",
-        reduced_list_txt=f"{args.out_folder}/genomes_in_reduced.txt",
-        reduced_db=f"{args.out_folder}/reduced_db.fa", 
-        mapping_class=None,  
-        mapping_reduced_db=None,  
+    logging.info("Reads: %s", args.reads)
+
+    logging.info("Read technology: %s", args.reads_flag)
+
+    logging.info("Database: %s", PREDEFINED_DB)
+
+    PREDEFINED_DB_JSON = write_strain_species_json(args.reference_genome_map, args.nodes, os.path.join(args.out_folder, "strain_species.json"))
+
+    logging.info("Threads: %d", args.threads)
+
+    reads_tech_minimap = {"pacbio": ["-c", "-x", "map-pb"], "hifi": ["-c", "-x", "map-hifi"], "ont": ["-c", "-x", "map-ont"]}
+
+    # =========================================================================
+    # STEP 1 — Assembly
+    # =========================================================================
+
+    logging.info("STEP 1: Assembly")
+
+    assembly_result = run_assembly(args, PATH_METAFLYE, PATH_METAMDBG, PATH_MYLOASM)
+
+    assembly_out_dir = assembly_result["output_dir"]
+
+    assembly_fasta = assembly_result["assembly"]
+
+    assembly_info = assembly_result["assembly_info"]
+
+    assembly_gfa = assembly_result["gfa"]
+
+    assembler = assembly_result["assembler"]
+
+    contig_paths = assembly_result["contig_paths"]
+
+    # =========================================================================
+    # STEP 2 — Map assembly to full database
+    # =========================================================================
+
+    logging.info("STEP 2: Mapping assembly to full reference database")
+
+    assembly_paf = os.path.join(args.out_folder, "assembly.to_big_db.paf")
+
+    cmd = [PATH_MINIMAP, "-x", "asm5", PREDEFINED_DB, assembly_fasta, "-t", str(args.threads)]
+
+    run_command_stdout(cmd, assembly_paf, force=args.force, stderr_path=os.path.join(args.out_folder, "minimap_reduction.log"))
+
+    require_file(assembly_paf, "Assembly-to-reference PAF")
+
+    # =========================================================================
+    # STEP 3 — HairSplitter
+    # =========================================================================
+
+    logging.info("STEP 3: Detecting collapsed strains with HairSplitter")
+
+    hairsplitter_out_dir = os.path.join(assembly_out_dir, "hairsplitter")
+
+    cleaned_assembly = os.path.join(hairsplitter_out_dir, "tmp", "cleaned_assembly.fasta")
+
+    cmd = [PATH_HAIRSPLITTER, "-i", assembly_fasta, "-f", args.reads, "-t", str(args.threads), "-o", hairsplitter_out_dir, "-F"]
+
+    run_command(cmd, target_file=cleaned_assembly, force=args.force, stderr_path=os.path.join(args.out_folder, "hairsplitter.log"))
+
+    collapsed_strains = os.path.join(assembly_out_dir, "collapsed_strains.txt")
+
+    if not os.path.exists(collapsed_strains) or args.force:
+
+        logging.info("Creating collapsed_strains.txt")
+
+        with open(cleaned_assembly) as inp, open(collapsed_strains, "w") as out:
+
+            for line in inp:
+
+                if not line.startswith(">"):
+                    continue
+
+                contig = line[1:].strip()
+
+                contig = contig.replace("@", ":")
+
+                contig = contig.replace("edge", "contig")
+
+                out.write(contig + "\n")
+
+    require_file(collapsed_strains, "Collapsed strain information")
+
+    # =========================================================================
+    # STEP 4 — Database reduction + novelty classification
+    # =========================================================================
+
+    logging.info("STEP 4: Database reduction and contig novelty classification")
+
+    dr_args = Namespace(
+        assembly=assembly_fasta,
+        contig_paf=assembly_paf,
+        strain_species_json=PREDEFINED_DB_JSON,
+        reference_genome_map=args.reference_genome_map,
+        num_collapsed_strains=collapsed_strains,
+        output_dir=args.out_folder,
+        database=None,  # the reduced database itself is extracted in step 6, only when the extended database needs (re)building
         threads=args.threads,
-        strictness="very-strict",
-        min_contig_len=1000,
-        collapsed_strains_overhead=2)
-        DatabaseReduction.run(dr_args)
-    except Exception as e:
-        logging.error(f"DatabaseReduction error: {e}")
-        exit()
+        strictness=args.strictness,
+        min_contig_len=args.min_contig_len,
+        collapsed_strains_overhead=args.collapsed_strains_overhead,
+        known_thr=args.known_thr,
+        novel_thr=args.novel_thr,
+        novelty_score=args.novelty_score,
+        no_mapq_filter=args.no_mapq_filter,
+    )
 
-    try:
-        logging.info("Running Minimap2 for classification...")
-        command = f"{PATH_MINIMAP} {reads_tech_minimap[args.reads_flag]} {args.out_folder}/reduced_db.fa {args.reads} -t {args.threads} > {args.out_folder}/reads.to_reduced.paf 2> {args.out_folder}/minimap_classification.log"
-        run_or_skip(command, f"{args.out_folder}/reads.to_reduced.paf", args.force)
-    except Exception as e:
-        logging.error(f"Minimap2 classification error: {e}")
-        exit()
+    dr_result = DR.run(dr_args)
 
-    try:
-        logging.info("Running ReadClassification...")
-        rc_args = Namespace(
-            paf_path=f"{args.out_folder}/reads.to_reduced.paf",
-            strain_species_info=str(PREDEFINED_DB_JSON),
-            read_class_output=f"{args.out_folder}/read_classification.out",
-            clustering_out="")
-        ReadClassification.run(rc_args)
-    except Exception as e:
-        logging.error(f"ReadClassification error: {e}")
-        exit()
+    classification = dr_result["classification"]
 
-    try:
-        logging.info("Running CalculateAbundances...")
-        ca_args = Namespace(
-            db=f"{args.out_folder}/reduced_db.fa",
-            reads=args.reads,
-            read_class=f"{args.out_folder}/read_classification.out",
-            rc_abundances_out=f"{args.out_folder}/rc_abundances.out",
-            abundances_out=f"{args.out_folder}/abundances.out",
-            clusters="")
-        CalculateAbundances.run(ca_args)
-    except Exception as e:
-        logging.error(f"CalculateAbundances error: {e}")
-        exit()
+    contig_scores = dr_result["contig_scores"]
+
+    contig_lengths = dr_result["contig_lengths"]
+
+    reduced_refs_path = dr_result["reduced_refs_path"]
+
+    extra_sequences = dr_result["extra_sequences"]
+
+    require_file(reduced_refs_path, "Reduced reference list")
+
+    require_file(extra_sequences, "Extra uncertain/novel contigs")
+
+    # =========================================================================
+    # STEP 5 — Novel grouping
+    # =========================================================================
+
+    logging.info("STEP 5: Grouping uncertain and novel candidate contigs")
+
+    novel_args = Namespace(
+        assembly=assembly_fasta,
+        extra_sequences=extra_sequences,
+        classification=classification,
+        contig_scores=contig_scores,
+        contig_lengths=contig_lengths,
+        strain_species_json=PREDEFINED_DB_JSON,
+        output_dir=args.out_folder,
+        threads=args.threads,
+        minimap=PATH_MINIMAP,
+        force=args.force,
+        assembler=assembler,
+        assembly_info=assembly_info,
+        gfa=assembly_gfa,
+        contig_paths=contig_paths,
+        grouping_strict_overlap=args.grouping_strict_overlap,
+        grouping_strict_identity=args.grouping_strict_identity,
+        grouping_relaxed_overlap=args.grouping_relaxed_overlap,
+        grouping_relaxed_identity=args.grouping_relaxed_identity,
+    )
+
+    novel_result = NovelDetection.run(novel_args)
+
+    extended_species_json = novel_result["extended_strain_species"]
+
+    require_file(extended_species_json, "Extended strain-species JSON")
+
+    # =========================================================================
+    # STEP 6 — Build extended database
+    # =========================================================================
+
+    logging.info("STEP 6: Building extended database")
+
+    extended_db = os.path.join(args.out_folder, "extended_db.fa")
+
+    host_fa = None
+
+    if args.host_reference:
+        host_fa, host_group = prepare_host_reference(args.host_reference, args.host_name, args.out_folder, force=args.force)
+
+        with open(extended_species_json) as fh:
+            species_info = json.load(fh)
+        if species_info.get(host_group) != host_group:
+            species_info[host_group] = host_group
+            with open(extended_species_json, "w") as fh:
+                json.dump(species_info, fh)
+            logging.info("Registered host group %s in %s", host_group, extended_species_json)
+
+    # extended_db.fa = reduced database (reduced_db_refs.txt extracted from the
+    # full database) + UNCERTAIN/novel contigs (+ host). A record of what it was
+    # built from is kept next to it; when it matches, the extended database and
+    # the read mapping against it are reused, otherwise both are rebuilt.
+    inputs_record = extended_db + ".inputs"
+    host_info = f"{os.path.abspath(host_fa)} {os.path.getsize(host_fa)}" if host_fa else "none"
+    inputs_text = (
+        f"database\t{os.path.abspath(PREDEFINED_DB)}\n"
+        f"reduced_refs_sha256\t{file_sha256(reduced_refs_path)}\n"
+        f"extra_sequences_sha256\t{file_sha256(extra_sequences)}\n"
+        f"host\t{host_info}\n"
+    )
+    previous = open(inputs_record).read() if os.path.exists(inputs_record) else None
+    rebuild_extended = args.force or not os.path.exists(extended_db) or previous != inputs_text
+
+    if rebuild_extended:
+        if os.path.exists(extended_db) and not args.force:
+            logging.info("Extended database inputs changed; rebuilding it and the read mapping.")
+        reduced_db = os.path.join(args.out_folder, "reduced_db.fa")
+        DR.build_reduced_database(PREDEFINED_DB, reduced_refs_path, reduced_db, args.threads)
+        concatenate_fastas([reduced_db, extra_sequences] + ([host_fa] if host_fa else []), extended_db, force=True)
+        if args.keep_reduced_db:
+            logging.info("Reduced database kept: %s", reduced_db)
+        else:
+            os.remove(reduced_db)
+            logging.info(
+                "Reduced database removed (its sequences are in extended_db.fa; recreate with: seqkit grep -f %s %s).", reduced_refs_path, PREDEFINED_DB
+            )
+        with open(inputs_record, "w") as fh:
+            fh.write(inputs_text)
+    else:
+        logging.info("Extended database is up to date with its inputs; reusing it: %s", extended_db)
+
+    require_file(extended_db, "Extended reference database")
+
+    # =========================================================================
+    # STEP 7 — Map reads to extended database
+    # =========================================================================
+
+    logging.info("STEP 7: Mapping reads to extended database")
+
+    reads_extended_paf = os.path.join(args.out_folder, "reads.to_extended.paf")
+
+    cmd = [PATH_MINIMAP] + reads_tech_minimap[args.reads_flag] + [extended_db, args.reads, "-t", str(args.threads)]
+
+    run_command_stdout(cmd, reads_extended_paf, force=rebuild_extended, stderr_path=os.path.join(args.out_folder, "minimap_classification.log"))
+
+    require_file(reads_extended_paf, "Read-to-extended-database PAF")
+
+    # =========================================================================
+    # STEP 8 — StrainRefine
+    # =========================================================================
+
+    logging.info("STEP 8: Running StrainRefine")
+
+    read_class_output = os.path.join(args.out_folder, "read_classification.out")
+
+    clustering_out = os.path.join(args.out_folder, "strainrefine_clustering")
+
+    ref_summary_output = os.path.join(args.out_folder, "strainrefine_reference_summary.tsv")
+
+    sr_args = Namespace(
+        paf_path=reads_extended_paf,
+        strain_species_info=extended_species_json,
+        cluster_eps=args.cluster_eps,
+        high_score_threshold=args.high_score_threshold,
+        min_high_score_reads=args.min_high_score_reads,
+        mid_high_score_reads=args.mid_high_score_reads,
+        min_high_score_fraction=args.min_high_score_fraction,
+        species_min_read_count=args.species_min_read_count,
+        species_min_mean_score=args.species_min_mean_score,
+        species_low_count_cap=args.species_low_count_cap,
+        read_class_output=read_class_output,
+        clustering_out=clustering_out,
+        ref_summary_output=ref_summary_output,
+    )
+
+    sr_args.reference_fasta = extended_db
+    sr_args.reference_genome_map = args.reference_genome_map
+    sr_args.taxonomy_nodes = args.nodes
+    sr_args.taxonomy_names = args.names
+    sr_args.novel_placement = not args.no_novel_placement
+    sr_args.placement_report = args.placement_report
+    sr_args.genome_depth = args.genome_depth
+    sr_args.min_abundance = args.min_abundance
+    sr_args.contig_classification = os.path.join(args.out_folder, "contig_classification.tsv")
+    sr_args.taxonomic_profile_output = None
+
+    sr_result = StrainRefine.run(sr_args)
+
+    require_file(read_class_output, "StrainRefine read classification")
+
+    logging.info("StrainRefine finished successfully.")
+
+    # =========================================================================
+    # STEP 9 — Abundance
+    # =========================================================================
+
+    logging.info("STEP 9: Calculating abundances")
+
+    CalculateAbundances.run(sr_result, sr_args)
+
+    require_file(ref_summary_output, "Reference summary")
+
+    logging.info("Abundance calculation finished successfully.")
 
     logging.info("MADRe finished successfully.")
+
 
 if __name__ == "__main__":
     main()

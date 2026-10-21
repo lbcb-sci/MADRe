@@ -1,0 +1,25 @@
+1	|	1	|	no rank	|		|	8	|	0	|	1	|	0	|	0	|	0	|	0	|	0	|		|
+2	|	131567	|	domain	|		|	0	|	0	|	11	|	0	|	0	|	0	|	0	|	0	|		|
+1239	|	1783272	|	phylum	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|		|
+1300	|	186826	|	family	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+1301	|	1300	|	genus	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+1328	|	671232	|	species	|	SA	|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|	code compliant; specified	|
+84998	|	201174	|	class	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+91061	|	1239	|	class	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|		|
+131567	|	1	|	cellular root	|	CO	|	8	|	1	|	1	|	1	|	0	|	1	|	1	|	0	|		|
+186826	|	91061	|	order	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+201174	|	1783272	|	phylum	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|		|
+394340	|	446660	|	subspecies	|	AE	|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|	code compliant; specified	|
+446660	|	447020	|	species	|	AE	|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|	code compliant; specified	|
+447020	|	1643826	|	genus	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+671232	|	1301	|	species group	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|		|
+862970	|	1328	|	strain	|		|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|		|
+862971	|	1328	|	strain	|		|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|		|
+1272910	|	1328	|	subspecies	|	SA	|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|	code compliant; specified	|
+1353243	|	1272910	|	strain	|		|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|		|
+1384484	|	2864143	|	strain	|		|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|		|
+1643822	|	84998	|	order	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+1643826	|	1643822	|	family	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant	|
+1671923	|	1328	|	subspecies	|	SA	|	0	|	1	|	11	|	1	|	0	|	1	|	1	|	0	|	code compliant; specified	|
+1783272	|	2	|	kingdom	|		|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|		|
+2864143	|	446660	|	subspecies	|	AE	|	0	|	1	|	11	|	1	|	0	|	1	|	0	|	0	|	code compliant; specified	|

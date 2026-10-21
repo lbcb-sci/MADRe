@@ -1,0 +1,5 @@
+reference	read_count	assigned_bases	reference_length	depth_signal	horizontal_coverage	best_database_hit	best_database_hit_vcig	strain_note
+1671923:Streptococcus anginosus subsp. anginosus strain FDAARGOS_1569	2528	37827600	1876334	20.160377	1.000000			
+394340:Adlercreutzia equolifaciens subsp. celatus strain JCM 14811	2378	35897218	2929991	12.251648	1.000000			
+1384484:Adlercreutzia equolifaciens DSM 19450	804	12104641	2862526	4.228657	0.999090			
+862970:Streptococcus anginosus C1051	509	8075636	1911706	4.224309	0.993449			

@@ -1,0 +1,18 @@
+# conda env create -f environment.yml && conda activate madre && pip install --no-deps .
+name: madre
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.8
+  - pip
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - minimap2>=2.28
+  - flye
+  - metamdbg
+  - hairsplitter
+  - seqkit
+  - myloasm

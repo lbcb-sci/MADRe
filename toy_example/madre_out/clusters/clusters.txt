@@ -1,4 +1,0 @@
-kraken:taxid|394340|NZ_AP024470.1 
-kraken:taxid|1384484|NC_022567.1 
-kraken:taxid|862970|NC_022244.1 kraken:taxid|1328|NZ_CP012805.1 
-kraken:taxid|1328|NZ_AP018548.1 

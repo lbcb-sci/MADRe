@@ -1,0 +1,26 @@
+reference	genome_id	genome_length
+kraken:taxid|862970|NC_022244.1	862970:Streptococcus anginosus C1051	1911706
+kraken:taxid|862971|NC_022239.1	862971:Streptococcus anginosus C238	2233640
+kraken:taxid|1384484|NC_022567.1	1384484:Adlercreutzia equolifaciens DSM 19450	2862526
+kraken:taxid|1353243|NZ_AP013072.1	1353243:Streptococcus anginosus subsp. whileyi MAS624	2122284
+kraken:taxid|1328|NZ_CP007573.1	1328:Streptococcus anginosus strain SA1	2036353
+kraken:taxid|1328|NZ_CP012805.1	1328:Streptococcus anginosus strain J4211	1924513
+kraken:taxid|1328|NZ_CP012719.1	1328:Streptococcus anginosus strain J4206	2001352
+kraken:taxid|1328|NZ_CP136160.1	1328:Streptococcus anginosus strain UMB8616	2042709
+kraken:taxid|1328|NZ_CP136161.1	1328:Streptococcus anginosus strain UMB8616	2042709
+kraken:taxid|1328|NZ_CP126961.1	1328:Streptococcus anginosus strain UMB4708	2148204
+kraken:taxid|1328|NZ_CP068060.1	1328:Streptococcus anginosus strain FDAARGOS_1155	2284041
+kraken:taxid|394340|NZ_AP024470.1	394340:Adlercreutzia equolifaciens subsp. celatus strain JCM 14811	2929991
+kraken:taxid|1328|NZ_CP069892.1	1328:Streptococcus anginosus strain FDAARGOS_1357	1981414
+kraken:taxid|1671923|NZ_CP085939.1	1671923:Streptococcus anginosus subsp. anginosus strain FDAARGOS_1569	1876334
+kraken:taxid|1328|NZ_AP018548.1	1328:Streptococcus anginosus strain CCUG 27928	1955308
+kraken:taxid|1328|NZ_CP118046.1	1328:Streptococcus anginosus strain VSI52	2097304
+kraken:taxid|1328|NZ_CP118047.1	1328:Streptococcus anginosus strain VSI52	2097304
+kraken:taxid|1328|NZ_CP118053.1	1328:Streptococcus anginosus strain VSI40	1958159
+kraken:taxid|1328|NZ_CP118054.1	1328:Streptococcus anginosus strain VSI37	2155669
+kraken:taxid|1328|NZ_CP118055.1	1328:Streptococcus anginosus strain VSI37	2155669
+kraken:taxid|1328|NZ_CP118056.1	1328:Streptococcus anginosus strain VSI37	2155669
+kraken:taxid|1328|NZ_CP118078.1	1328:Streptococcus anginosus strain VSI16	2085682
+kraken:taxid|1328|NZ_CP118029.1	1328:Streptococcus anginosus strain VSI68	2010423
+kraken:taxid|1328|NZ_LR134283.1	1328:Streptococcus anginosus strain NCTC10713	1953654
+kraken:taxid|1328|NZ_LR594037.1	1328:Streptococcus anginosus strain NCTC11064	1904537

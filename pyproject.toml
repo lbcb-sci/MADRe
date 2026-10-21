@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "madre"
+version = "2.0.0"
+description = "Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction, with detection and placement of organisms missing from the database."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Josipa Lipovac", email = "josipa.lipovac@fer.unizg.hr"}]
+requires-python = ">=3.8"
+dependencies = ["numpy", "scipy", "scikit-learn", "matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/lbcb-sci/MADRe"
+
+[project.scripts]
+madre = "MADRe:main"
+madre-prepare-database = "PrepareDatabase:main"
+database-reduction = "DatabaseReduction:main"
+strain-refine = "StrainRefine:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["MADRe", "DatabaseReduction", "NovelDetection", "NovelPlacement", "StrainRefine", "CalculateAbundances", "PrepareDatabase"]

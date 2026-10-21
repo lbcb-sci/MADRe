@@ -1,0 +1,16 @@
+taxid_or_group	rank	name	read_count	genome_equivalent_signal	relative_abundance
+131567	cellular root	cellular organisms	6219	40.864990	100.000000
+2	domain	Bacteria	6219	40.864990	100.000000
+1783272	kingdom	Bacillati	6219	40.864990	100.000000
+1239	phylum	Bacillota	3037	24.384685	59.671335
+201174	phylum	Actinomycetota	3182	16.480305	40.328665
+91061	class	Bacilli	3037	24.384685	59.671335
+84998	class	Coriobacteriia	3182	16.480305	40.328665
+186826	order	Lactobacillales	3037	24.384685	59.671335
+1643822	order	Eggerthellales	3182	16.480305	40.328665
+1300	family	Streptococcaceae	3037	24.384685	59.671335
+1643826	family	Eggerthellaceae	3182	16.480305	40.328665
+1301	genus	Streptococcus	3037	24.384685	59.671335
+447020	genus	Adlercreutzia	3182	16.480305	40.328665
+1328	species	Streptococcus anginosus	3037	24.384685	59.671335
+446660	species	Adlercreutzia equolifaciens	3182	16.480305	40.328665

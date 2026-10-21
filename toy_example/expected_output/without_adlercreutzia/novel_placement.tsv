@@ -1,0 +1,4 @@
+contig	original_group	new_group	candidate_family	best_hit	best_hit_vcig	contig_reads	contig_final_reads	resolved_rank	resolved_label	pass_used	cluster_members	contig_shared_fraction	count_rank	count_label	count_source	strain_outcome	strain_cluster_representative	decision
+contig_12	NOVEL_COMPARE_00002	NOVEL_COMPARE_00002	1300	kraken:taxid|1328|NZ_LR594037.1	0.1101	4	0											contig_population_too_small
+contig_45	NOVEL_COMPARE_00002	NOVEL_COMPARE_00002	1300	kraken:taxid|1328|NZ_CP012719.1	0.0005	1318	1224											no_match_at_any_level (pass1=alone_in_cluster, pass2=too_few_entities, pass3=alone_in_cluster)
+contig_8	NOVEL_COMPARE_00002	NOVEL_COMPARE_00002	1300	kraken:taxid|1353243|NZ_AP013072.1	0.0024	591	527											no_match_at_any_level (pass1=alone_in_cluster, pass2=too_few_entities, pass3=alone_in_cluster)

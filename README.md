@@ -4,254 +4,183 @@
   <img src="imgs/MADRe_logo-modified.png" alt="MADRe logo" width="150"/>
 </p>
 
+Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction, including organisms that are missing from the database.
 
-Strain-level metagenomic classification with Metagenome Assembly driven Database Reduction approach
-
-+ [Why MADRe?](#why-madre)
++ [What MADRe does](#what-madre-does)
++ [What is new in MADRe 2](#what-is-new-in-madre-2)
 + [Installation](#installation)
-+ [Build database](#build-database)
-+ [How to run MADRe?](#how-to-run-madre)
-+ [Run specific steps](#run-specific-steps)
-+ [Abundance calculation](#abundance-calculation)
++ [Preparing a database](#preparing-a-database)
++ [Running MADRe](#running-madre)
++ [Output files](#output-files)
++ [Toy example](#toy-example)
++ [MADRe 1](#madre-1)
 + [Citing MADRe](#citing-madre)
 
-## Why MADRe?
+## What MADRe does
 
-**MADRe (Metagenomic Assembly-Driven Database Reduction)** is designed for metagenomic analyses where there is **no prior knowledge about the sample composition** and the starting database is **large and diverse**, containing thousands of species and strains.
+MADRe classifies long metagenomic reads (ONT, PacBio HiFi) against a large reference database that may hold many strains per species. It does not map every read to every genome. Instead it first assembles the reads, maps the contigs to the database and keeps only the genomes the contigs support (**assembly-driven database reduction**). The reads are then mapped to this much smaller database and assigned to strains.
 
-In such exploratory settings, traditional read-based classifiers either require extensive computational resources or struggle to resolve closely related genomes.  
-MADRe overcomes these limitations by introducing an **assembly-guided database reduction strategy** that automatically identifies and retains only the genomes supported by the data, thereby enabling a more computationally efficient mapping-based classification process.  
-This dramatically reduces both **runtime and disk usage** compared to traditional mapping-based classifiers, while improving **classification precision and accuracy** relative to k-mer-based metagenomic classification methods.
+Real samples often contain organisms that are not in the database at all. MADRe 2 recognises the contigs of such organisms, keeps their reads on those contigs instead of forcing them onto the closest known genome, and places them in the taxonomy as far as the database allows (e.g. "a new species of genus X").
 
-### When to use MADRe?
-Use MADRe when working with:
-- Complex metagenomic datasets where the taxonomic composition is unknown.
-- Very large reference databases containing multiple strains per species.
-- Long-read sequencing data (ONT, PacBio HiFi) where assembly is feasible.
+The pipeline:
 
-### Why MADRe is different?
-- **Efficient exploration of large databases** – Instead of mapping every read to every genome, MADRe narrows the search space through an assembly-driven reduction step, lowering computational load without significantly sacrificing accuracy. 
-- **Resource-aware design** – For smaller datasets (~1.7 M ONT reads), MADRe requires up to ~2.5× less RAM and achieves ~5.2× shorter runtime, while for larger datasets (~5 M ONT reads) it runs up to ~3× faster and uses ~7.5× less disk space, all while maintaining higher interpretability and accuracy compared with other mapping-based, strain-aware classifiers.
-- **Improved precision over k-mer based tools** – By leveraging alignment-based evidence from assembled contigs, MADRe avoids many of the false-positive assignments typical for k-mer classifiers.  
-- **Modular and transparent** – Each step (*Database Reduction*, *Read Classification*, *Calculate Abundances*) can be executed independently, producing interpretable outputs suitable for downstream analyses.
+1. **Assembly** of the reads (metaFlye for ONT, metaMDBG for HiFi; Myloasm optional), or your own contigs with `--assembly`.
+2. **Contigs mapped** to the full reference database (minimap2).
+3. **Collapsed strains** per contig (HairSplitter).
+4. **Database reduction and contig classification.** Each contig is labelled KNOWN, UNCERTAIN or NOVEL_CANDIDATE by how well it is covered by database genomes. The supported genomes are selected as whole genomes (all their chromosomes and plasmids).
+5. **Novel contigs grouped** into putative organisms by sequence similarity and assembly-graph links.
+6. **Extended database** = selected genomes + UNCERTAIN and novel contigs (+ an optional host genome).
+7. **Reads mapped** to the extended database.
+8. **StrainRefine:** novel contigs are placed in the taxonomy (species, genus or family, or left unplaced), reads are assigned to strains, and near-identical strains are clustered.
+9. **Abundances:** genome copies per strain and species, a species summary and a taxonomic profile.
 
-MADRe is particularly useful as a **first-pass classification tool** for large, uncharacterized metagenomic datasets, providing a computationally efficient and biologically meaningful starting point for deeper strain-level analysis.
+## What is new in MADRe 2
+
+- **Organisms missing from the database** are detected (contig classification + novel groups) and **placed in the taxonomy**.
+- **StrainRefine replaces MADRe 1's read classification step.** Reads are assigned to strains from their mapping profiles, and strains the reads cannot tell apart are clustered, which removes many false-positive strains. MADRe 2 builds on [StrainRefine](https://github.com/lbcb-sci/StrainRefine) ([Lipovac et al., Journal of Computational Biology, 2026](https://journals.sagepub.com/doi/10.1177/15578666261485334)) and extends it with novel contigs and their placement in the taxonomy.
+- **Whole-genome database reduction:** a genome enters the reduced database with all its sequences.
+- **Abundance as genome copies**, robust to high-copy plasmids (median depth over the genome's sequences), also for novel groups.
+- **Host separation:** with `--host-reference`, host reads are reported as host and left out of the microbial abundances.
+- **Your own contigs** can be used instead of the assembly step (`--assembly`).
+- **Simpler database setup:** the species of every reference is read from the taxonomy (`--nodes`); `madre-prepare-database` builds the reference files from genome FASTAs or an existing combined FASTA.
+
+MADRe 2 keeps the command name `madre`, but its options and outputs differ from MADRe 1 (see [MADRe 1](#madre-1)).
 
 ## Installation
 
-### OPTION 1 : Conda
+From source, with the dependencies from conda:
 
+```bash
+git clone https://github.com/lbcb-sci/MADRe
+cd MADRe
+conda env create -f environment.yml
+conda activate madre
+pip install --no-deps .
 ```
-conda install bioconda::madre
+
+This installs the commands `madre` (the pipeline), `madre-prepare-database`, `database-reduction` and `strain-refine` (single steps).
+
+Dependencies: Python ≥ 3.8 with numpy, scipy, scikit-learn and matplotlib; minimap2 ≥ 2.28, metaFlye, metaMDBG, HairSplitter and seqkit (Myloasm optional). All are in `environment.yml`.
+
+## Preparing a database
+
+MADRe needs, besides the reads:
+
+| input | what it is | given as |
+|---|---|---|
+| reference FASTA | all reference genomes; every header carries the taxid (`>|562|NC_000913.3`) | `predefined_db` in `config.ini` |
+| reference genome map | every sequence → its genome, and the genome's total length | `--reference_genome_map` |
+| taxonomy | `nodes.dmp` and `names.dmp` (NCBI format, e.g. NCBI or GTDB) | `--nodes`, `--names` |
+
+`madre-prepare-database` builds the first two, either from a folder with one FASTA per genome (e.g. NCBI downloads) or from an existing combined FASTA with taxids in its headers (e.g. a Kraken2 library):
+
+```bash
+# a folder of genome FASTAs + NCBI's assembly_summary.txt for their taxids
+madre-prepare-database genomes --genomes my_genomes/ --assembly-summary assembly_summary.txt --nodes taxdump/nodes.dmp --out-prefix db/my_db
+
+# an existing combined FASTA
+madre-prepare-database fasta --fasta library.fna --nodes taxdump/nodes.dmp --out-prefix db/library
 ```
-set up the configuration (config.ini file):
-```                                                               
+
+The NCBI taxonomy: `wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz` and unpack it. Use the taxonomy version your database's taxids come from.
+
+All details (genome grouping, taxid tables, checks): [DATABASE_PREPARATION.md](DATABASE_PREPARATION.md).
+
+## Running MADRe
+
+`config.ini` gives the tools and the database (use absolute paths):
+
+```ini
 [PATHS]
 metaflye = flye
 metaMDBG = metaMDBG
 minimap = minimap2
 hairsplitter = hairsplitter.py
-seqkit = seqkit
+myloasm = myloasm
 
 [DATABASE]
-predefined_db = /path/to/database.fna
-strain_species_json = /path/to/taxids_species.json
-```
-NOTE: Prebuilt version of ```taxids_species.json``` can be found in GitHub database folder. More information about it find under the section [Build database](#build-database).
-
-simple run:
-
-```
-madre --reads [path_to_the_reads] --out-folder [path_to_the_out_folder] --config config.ini
-```
-more information:
-```
-madre --help
+predefined_db = /path/to/db/my_db.fna.gz
 ```
 
+`seqkit` must be on the `PATH`.
 
-### OPTION 2: Running from source
-
-```
-git clone https://github.com/lbcb-sci/MADRe
-cd MADRe
-```
-
-For running from source you need to install following dependecies:
-- python >= 3.10
-- scikit-learn
-- minimap2
-- flye
-- metamdbg
-- hairsplitter
-- seqkit
-- kraken2
-- myloasm (optional)
-
-Dependencies can be installed through conda:
-```
-conda create -n MADRe_env python=3.10 scikit-learn minimap2 flye metamdbg hairsplitter seqkit kraken2 -c conda-forge -c bioconda 
-conda activate MADRe_env
+```bash
+madre --out-folder results/sample1 \
+      --reads sample1.fastq.gz \
+      --reads_flag ont \
+      --threads 64 \
+      --config config.ini \
+      --reference_genome_map /path/to/db/my_db.reference_genome_map.tsv \
+      --nodes taxdump/nodes.dmp \
+      --names taxdump/names.dmp
 ```
 
-set up the configuration (config.ini file):
-```                                                               
-[PATHS]
-metaflye = /path/to/flye
-metaMDBG = /path/to/metaMDBG
-minimap = /path/to/minimap2
-hairsplitter = /path/to/hairsplitter.py
-seqkit = /path/to/seqkit
-myloasm = /path/to/myloasm #optional
+Frequently used options (all: `madre --help`):
 
-[DATABASE]
-predefined_db = /path/to/database.fna
-strain_species_json = ./database/taxids_species.json
-```
+| option | what it does |
+|---|---|
+| `--reads_flag ont\|hifi\|pacbio` | read technology (default `ont`). ONT is assembled with metaFlye, HiFi with metaMDBG. PacBio CLR reads need `--assembly`. |
+| `--use-metamdbg` / `--use-myloasm` | assemble ONT reads with metaMDBG, or ONT/HiFi reads with Myloasm |
+| `--assembly contigs.fasta` | use these contigs instead of assembling the reads (without an assembly graph, novel contigs are grouped by similarity only) |
+| `--host-reference host.fna --host-name human` | separate host reads (e.g. human T2T-CHM13) |
+| `--min-abundance X` | leave species below X% out of the taxonomic profile (the complete profile is kept as `strainrefine_taxonomic_profile.all_species.tsv`); default 0 (off) |
+| `--no-novel-placement` | do not place novel contigs in the taxonomy |
+| `--placement-report` | draw a figure of the placement of every novel contig with a candidate family (`novel_placement_report/`, see [Placement figures](#placement-figures)); off by default, since with thousands of novel contigs drawing takes hours |
+| `--keep-reduced-db` | keep `reduced_db.fa` (by default only the list `reduced_db_refs.txt` is kept) |
+| `--threads N` | threads for all tools (default 32) |
+| `-F` | rerun steps whose outputs already exist (by default finished steps are skipped, so an interrupted run can be resumed) |
 
-simple run:
-```
-python MADRe.py --reads [path_to_the_reads] --out-folder [path_to_the_out_folder] --config config.ini
-```
+## Output files
 
-more information:
-```
-python MADRe.py --help
-```
+In `--out-folder`:
 
-The recommended database is Kraken2 bacteria database - instructions on how to build it you can find under the section [Build database](#build-database).
+| file | content |
+|---|---|
+| `strainrefine_taxonomic_profile.tsv` | taxonomic profile: one row per taxon (all ranks) and per novel group, with read count, genome copies (`genome_equivalent_signal`) and relative abundance (%) |
+| `strainrefine_species_or_group_summary.tsv` | one row per species or novel group: reads, bases, genome copies, relative abundance and its references |
+| `strainrefine_reference_summary.tsv` | one row per strain (genome) or contig with reads: read count, bases, length, depth, horizontal coverage. For a contig, `best_database_hit` is the genome of its best database match and `best_database_hit_vcig` the contig's novelty score (0–1, see `contig_classification.tsv`); a low value means the contig is hardly similar to the database, so this is a label, not an identification |
+| `read_classification.out` | `read_id : reference` for every assigned read (a database sequence, a contig of a novel organism, or the host) |
+| `contig_classification.tsv` | every contig: KNOWN / UNCERTAIN / NOVEL_CANDIDATE, its novelty score (`vcig_norm`: the fraction of the contig covered by alignments to database genomes, weighted by their identity) and best database hit |
+| `novel_groups.tsv` | the novel contigs and the putative organisms (groups) they form |
+| `novel_placement.tsv` | where each novel contig was placed in the taxonomy (rank, taxon, and why) |
+| `novel_placement_report/` | only with `--placement-report`: one figure per novel contig with a candidate family, and the numbers behind them |
+| `strainrefine_clustering/` | clusters of indistinguishable strains and their representatives |
+| `reduced_db_refs.txt` | the database sequences selected by the reduction |
 
-Information on how to run specific MADRe steps find under the section [Run specific steps](#run-specific-steps).
-</details>
+Novel organisms appear in the profile and summaries as `NOVEL_COMPARE_…` (unplaced groups), or under the taxon they were placed in.
 
-**Note:**  
-If you set the `--reads_flag` parameter to `ont`, MADRe will use **metaFlye** as the assembler.  
-If you set it to `pacbio` or `hifi`, MADRe will use **metaMDBG** by default.  
-If you additionally specify `--use-myloasm True`, MADRe will use **Myloasm** regardless of the `--reads_flag` value.
+The other files in the output folder are intermediate results of the pipeline steps; all of them are described in the [toy example](toy_example/Tutorial.md#everything-in-the-output-folder).
 
-**MAIN OUTPUT FILES**
+### Placement figures
 
-``` read_classification.out ``` - Each row represents the classification result for one read: `read_id : genome_id`.
+With `--placement-report`, MADRe draws a figure for every novel contig with a candidate family, in `novel_placement_report/contig_<id>.png`. It shows how the contig was placed in the taxonomy:
 
-``` rc_abundances.out ``` - Each row represents the read count for a genome ID: `genome_id : read_count`.
+- **Header:** where the contig's reads are counted (e.g. "counted at GENUS *Helicobacter*", or "NOT COUNTED at any rank" for a contig that stays an unplaced novel group), and which comparison decided it.
+- **Three panels**, one per comparison: the contig against its nearest database strains, against their species, and against their genera. Each is a dendrogram of read sharing: the distance between two entries is 1 − shared reads / reads of the smaller one (0 = the same reads, 1 = no shared reads). A contig that joins a cluster below the cut (red dashed line) gets the taxon of that cluster; the panel that decided is marked "DECIDED HERE".
+- The numbers behind the figures are in `novel_placement_report/novel_contig_neighbours.tsv`, and every decision is in `novel_placement.tsv`.
 
-``` abundances.out ``` - Each row represents abundance information for one genome ID: `genome_id : abundance`.
+Example: a contig of *Helicobacter pylori*, simulated with *H. pylori* removed from the database. Its reads do not cluster with any single species of the database (top), but its cluster at the species level contains only *Helicobacter* species (middle), so it is placed in genus *Helicobacter*:
 
-## Build database
+<p align="center">
+  <img src="imgs/novel_placement_example.png" alt="Placement of a novel contig in genus Helicobacter" width="800"/>
+</p>
 
-### Recommended database (kraken2 built database)
-The recommend database is the kraken2 built bacteria database following next steps:
-```
-kraken2-build --download-taxonomy --db $DBNAME
-kraken2-build --download-library bacteria --db $DBNAME
-kraken2-build --build --db $DBNAME
-```
+## Toy example
 
-Once the database is built, the path to `library.fna` should be specified in the `config.ini` file.
+[toy_example/Tutorial.md](toy_example/Tutorial.md) runs MADRe on a small simulated dataset twice: with a database that contains all its species, and with one species removed, to show how MADRe reports an organism that is missing from the database.
 
-Detailed instructions that are including the one listed here can be found at [kraken2 github page](https://github.com/DerrickWood/kraken2/blob/master/docs/MANUAL.markdown).
+## MADRe 1
 
-### GTDB database
-
-For using GTDB database, first download the latest GTDB database version and its associated metadata from https://data.gtdb.aau.ecogenomic.org:
-```
-wget https://data.gtdb.aau.ecogenomic.org/releases/latest/genomic_files_reps/gtdb_genomes_reps.tar.gz
-wget https://data.gtdb.aau.ecogenomic.org/releases/latest/bac120_metadata.tsv.gz
-gunzip bac120_metadata.tsv.gz
-```
-Then run script `database/gtdb_to_madre.sh`:
-```
-./gtdb_to_madre.sh --tar gtdb_genomes_reps.tar.gz --meta bac120_metadata.tsv --out MADRe_reference_database
-```
-
-### Build your own database
-
-If you want to use your database it is important to have taxonomy information for the references included in the database. 
-
-References in the database should have headers in this way:
-
-```
->|taxid|accession_number
-```
-
-```../database/taxids_species.json``` file contains information on species taxid for every strain taxid obtained from NCBI taxonomy (downloaded December 2024.). 
-
-MADRe for species-level classification step uses taxids index. For building new taxids index from newer taxonomy or for different taxonomic levels you will need taxonomy files (can be downloaded here https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/) and you can use ```database/build_json_taxids.py``` script.
-
-## How to run MADRe?
-
-This README contains basic information on how to run MADRe pipeline. However, **for a more detailed tuorial check [toy_example/Tutorial.md](https://github.com/lbcb-sci/MADRe/blob/main/toy_example/Tutorial.md) file**.
-
-## Run specific steps
-
-MADRe is the pipeline contained of two main steps: 1) database reduction and 2) read classification.
-
-It is possible to run those steps independently. More infromation on running can be obtained with:
-
-```
-database-reduction --help
-read-classification --help
-```
-
-installed from source:
-```
-python src/DatabaseReduction.py --help
-python src/ReadClassification.py --help
-```
-
-### Database reduction information
-
-To run database reduction step separately you need to provide names of the output paths, mapping PAF file containg contigs mappings to large database (database needs to follow rules from [Build database](#build-database) section) and text file containing how many strains are collapsed in which contig. If contig represents only one strain there should be 0 next to it, if it represents 2 strains, 1 is collapsed so there should be 1 next to it. The file should look like this:
-```
-...
-contig_7:0 
-contig_8:0 
-contig_8:1 
-contig_8:2 
-contig_8:3
-...
-```
-
-If as output you only specify ```--reduced_list_txt``` you won't get fasta file of reduced database, just list of references that should go to reduced database. To get fasta file of reduced database specify ```--reduced_db```.
-
-Database reduction step uses taxid index. By default it uses ```database/taxid_species.json```. If specific large database is used, then right taxid index should be provided using ```--strain_species_info```.
-
-
-### Read classification information
-
-To run read classification step separately you need to provide PAF file containing read mappings to the reference. This step can be run on any database (database needs to follow rules from [Build database](#build-database) section), so it doesn't have to be previously reduced.
-
-Read classification step uses taxid index. By default it uses ```database/taxid_species.json```. If specific large database is used, then right taxid index should be provided using ```--strain_species_info```.
-
-Output file is text file containg lines as: ```read_id : reference```.
-
-### Read Classification with clustering
-
-As part of read classification step, clustering of very similar strains can also be performed. If you want to perform clustering provide path to the directory with output clustering files using ```--clustering_out```. Output clustering files are:
-```
-clusters.txt - Every line represents one cluster. References in cluster separated with spaces.
-representatives.txt - Every line represents a cluster representative reference of the cluster from that line in clusters.txt file.
-```
-
-## Abundance calculation
-
-For abundance calculation information run:
-```
-calculate-abundances --help
-```
-installed from source:
-```
-python src/CalculateAbundances.py --help
-```
-The input to this step is read classification output file that has lines as ```read_id : reference```. This file can be obtained with read classification step.
-
-The default output is rc_abundances.out containing read count abundances. If you want to calculate abundance as sum_of_read_lengths/reference_length you need to provide database path used in read classification step using ```--db``` - be aware that this step if database is big takes a little bit longer than calculation of just read count abundances. 
-
-If you want to calculate cluster abundances, you need to provide path to the directory containing ```clusters.txt``` and ```representatives.txt``` files. In that case output files will contain only represetative references with sumarized abundances for cluster that reference is represetative of.
+MADRe 1 remains available on the branch [`madre1`](https://github.com/lbcb-sci/MADRe/tree/madre1) and as release [v0.0.5](https://github.com/lbcb-sci/MADRe/releases/tag/v0.0.5) (Bioconda: `conda install bioconda::madre=0.0.5`).
 
 ## Citing MADRe
-bioRxiv preprint - https://www.biorxiv.org/content/10.1101/2025.05.12.653324:
+
+GigaScience - https://doi.org/10.1093/gigascience/giag030:
 ```
-Lipovac, J., Sikic, M., Vicedomini, R., & Krizanovic, K. (2025). MADRe: Strain-Level Metagenomic Classification Through Assembly-Driven Database Reduction. bioRxiv, 2025-05.
+Lipovac, J., Šikić, M., Vicedomini, R., & Križanović, K. (2026). MADRe: Strain-level metagenomic classification through assembly-driven database reduction. GigaScience, 15, giag030. https://doi.org/10.1093/gigascience/giag030
 ```
 
+StrainRefine, used for read assignment in MADRe 2 - https://journals.sagepub.com/doi/10.1177/15578666261485334:
+```
+Lipovac, J., Angevin, L., & Križanović, K. (2026). Using Mapping-Profiles to Refine Strain-Level Metagenomic Classification. Journal of Computational Biology. https://doi.org/10.1177/15578666261485334
+```
