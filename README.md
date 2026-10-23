@@ -60,7 +60,7 @@ pip install --no-deps .
 
 This installs the commands `madre` (the pipeline), `madre-prepare-database`, `database-reduction` and `strain-refine` (single steps).
 
-Dependencies: Python ≥ 3.8 with numpy, scipy, scikit-learn and matplotlib; minimap2 ≥ 2.28, metaFlye, metaMDBG, HairSplitter and seqkit (Myloasm optional). All are in `environment.yml`.
+Dependencies: Python ≥ 3.8 with numpy, scipy, scikit-learn and matplotlib; minimap2 ≥ 2.28, metaFlye, metaMDBG, HairSplitter, seqkit and samtools (Myloasm optional). All are in `environment.yml`.
 
 ## Preparing a database
 

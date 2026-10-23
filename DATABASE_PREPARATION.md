@@ -89,6 +89,17 @@ reference	genome_id	genome_length
 
 MADRe uses it to put whole genomes into the reduced database, to treat the sequences of one genome as one strain, and to divide reads by the whole genome's length.
 
+## Large databases: index for fast extraction
+
+For every sample, MADRe extracts the references it selected from the database. With a plain or gzip-compressed FASTA this reads the whole file each time (`seqkit grep`), which takes hours for a database of hundreds of GB. Compress it with `bgzip` and index it once; MADRe then reads the selected references directly (`samtools faidx`), in minutes:
+
+```bash
+zcat my_db.fna.gz | bgzip -@ 32 -c > my_db.bgz.fna.gz
+samtools faidx my_db.bgz.fna.gz      # writes my_db.bgz.fna.gz.fai and .gzi next to it
+```
+
+Use the bgzip file as `predefined_db`. The extracted sequences are the same; only header descriptions after the first word are not copied. MADRe falls back to `seqkit grep` when there is no index, or when a sequence name ends in something that looks like a region (`name:100` or `name:100-200`).
+
 ## config.ini
 
 ```ini

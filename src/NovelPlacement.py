@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
+from scipy.sparse import csr_matrix
 from scipy.spatial.distance import squareform
 
 
@@ -428,6 +429,32 @@ def write_contig_report(
     return table
 
 
+def candidate_distances(candidates, min_population_size):
+    """Distances among the candidates cluster_step keeps (read set of at least min_population_size reads), in its order:
+    1 - shared reads / reads of the smaller set (1 if either is empty), from a sparse read-membership matrix product.
+    Same numbers as cluster_step's pairwise loop (exact integer counts, the same float division); computed once per
+    family and pass instead of once per contig."""
+    entities = [(label, reads) for label, reads in candidates if len(reads) >= min_population_size]
+    labels = [label for label, _ in entities]
+    n = len(entities)
+    if n == 0:
+        return labels, np.zeros((0, 0))
+    index = {}
+    rows, cols = [], []
+    for i, (_, reads) in enumerate(entities):
+        for r in reads:
+            rows.append(i)
+            cols.append(index.setdefault(r, len(index)))
+    member = csr_matrix((np.ones(len(rows), dtype=np.int32), (rows, cols)), shape=(n, len(index)))
+    shared = (member @ member.T).toarray().astype(np.float64)
+    sizes = np.array([len(reads) for _, reads in entities], dtype=np.float64)
+    smaller = np.minimum.outer(sizes, sizes)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dist = np.where(smaller > 0, 1.0 - shared / smaller, 1.0)
+    np.fill_diagonal(dist, 0.0)
+    return labels, dist
+
+
 def cluster_step(
     cid,
     contig_raw_reads,
@@ -439,6 +466,7 @@ def cluster_step(
     cut_distance,
     plot_info=None,
     allow_single=False,
+    known=None,
 ):
     """candidates: [(label, read_set), ...], not including the contig itself.
 
@@ -464,13 +492,22 @@ def cluster_step(
     if n < 3:
         return None, 0, 'too_few_entities'
 
-    dist = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            a, b = entities[i][1], entities[j][1]
-            smaller = min(len(a), len(b))
-            d_ij = 1.0 - (len(a & b) / smaller) if smaller else 1.0
-            dist[i, j] = dist[j, i] = d_ij
+    if known is not None and known[0] == [label for label, _ in entities[:-1]]:
+        # distances among the candidates computed once (candidate_distances); only the contig's own row here
+        dist = np.zeros((n, n))
+        dist[: n - 1, : n - 1] = known[1]
+        for i in range(n - 1):
+            a = entities[i][1]
+            smaller = min(len(a), len(contig_raw_reads))
+            dist[i, n - 1] = dist[n - 1, i] = 1.0 - (len(a & contig_raw_reads) / smaller) if smaller else 1.0
+    else:
+        dist = np.zeros((n, n))
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = entities[i][1], entities[j][1]
+                smaller = min(len(a), len(b))
+                d_ij = 1.0 - (len(a & b) / smaller) if smaller else 1.0
+                dist[i, j] = dist[j, i] = d_ij
 
     condensed = squareform(dist, checks=False)
     z = linkage(condensed, method=linkage_method)
@@ -531,6 +568,7 @@ class Placement:
         self.contig_family = {}
         self.family_species_refs = defaultdict(lambda: defaultdict(set))
         self._species_pool_cache = {}
+        self._known_cache = {}  # (pass, family) -> distances among that pass's candidates (candidate_distances)
 
     def rank_of(self, taxid, rank):
         key = (taxid, rank)
@@ -540,6 +578,12 @@ class Placement:
 
     def species_of(self, taxid):
         return self.rank_of(taxid, 'species') or taxid
+
+    def _known(self, key, candidates):
+        """Distances among one pass's candidates of a family, computed on first use (the same for every contig of the family)."""
+        if key not in self._known_cache:
+            self._known_cache[key] = candidate_distances(candidates, self.opts.min_population_size)
+        return self._known_cache[key]
 
     def species_pools(self, fam):
         """species taxid -> reads of all its references, for the species of family fam
@@ -602,7 +646,9 @@ class Placement:
                 continue
             result, status_log = None, []
             cands = [(r, self.read_sets.get(r, set())) for r in family_refs.get(fam, [])]
-            members, shared, status = cluster_step(cid, contig_reads, cands, cut_distance=o.cut_distance_pass1, **common)
+            members, shared, status = cluster_step(
+                cid, contig_reads, cands, cut_distance=o.cut_distance_pass1, known=self._known(('references', fam), cands), **common
+            )
             status_log.append(f'pass1={status}')
             if members:
                 sp = {species_of(m.split('|')[1]) for m in members}
@@ -610,7 +656,9 @@ class Placement:
                     result = ('species', sp.pop(), members, shared, 1)
             if result is None:
                 cands = list(self.species_pools(fam).items())
-                members, shared, status = cluster_step(cid, contig_reads, cands, cut_distance=o.cut_distance_pass2, **common)
+                members, shared, status = cluster_step(
+                    cid, contig_reads, cands, cut_distance=o.cut_distance_pass2, known=self._known(('species', fam), cands), **common
+                )
                 status_log.append(f'pass2={status}')
                 if members:
                     genera = {rank_of(m, 'genus') for m in members}
@@ -623,7 +671,13 @@ class Placement:
                     if g:
                         pools[g] |= pooled
                 members, shared, status = cluster_step(
-                    cid, contig_reads, list(pools.items()), cut_distance=o.cut_distance_pass3, allow_single=o.single_genus_family, **common
+                    cid,
+                    contig_reads,
+                    list(pools.items()),
+                    cut_distance=o.cut_distance_pass3,
+                    allow_single=o.single_genus_family,
+                    known=self._known(('genera', fam), list(pools.items())),
+                    **common,
                 )
                 status_log.append(f'pass3={status}')
                 if members:

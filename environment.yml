@@ -15,4 +15,5 @@ dependencies:
   - metamdbg
   - hairsplitter
   - seqkit
+  - samtools
   - myloasm

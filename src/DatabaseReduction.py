@@ -46,9 +46,12 @@ Those steps belong to later stages of MADRe.
 """
 
 import argparse
+import collections
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 from collections import defaultdict
 
@@ -890,20 +893,56 @@ def write_classification_tsv(classification, contig_lengths, output_path):
 # =============================================================================
 
 
+REGION_LIKE = re.compile(r":[0-9,]+(-[0-9,]*)?$")
+
+
+def faidx_usable(database):
+    """samtools faidx can read the database directly: an index next to it (.fai, and .gzi for a bgzip .gz) and samtools on PATH."""
+    if not os.path.exists(database + ".fai") or not shutil.which("samtools"):
+        return False
+    return not str(database).endswith(".gz") or os.path.exists(database + ".gzi")
+
+
 def build_reduced_database(database, reduced_refs_path, reduced_db_path, threads):
     """
-    Extract selected references from the full database using seqkit.
+    Extract the selected references from the full database.
+
+    With a samtools faidx index (database.fai, plus .gzi for a bgzip-compressed .gz) the references are read directly
+    (samtools faidx -r), in the database's order and with its line length, which reproduces seqkit grep's output when the
+    headers carry only the sequence name; minutes instead of a pass over the whole file. Otherwise seqkit grep reads the
+    whole database. Prepare the index once with: bgzip the FASTA, then samtools faidx it.
     """
 
     logging.info("Building reduced database.")
 
-    cmd = ["seqkit", "grep", "-f", reduced_refs_path, "-j", str(threads), database]
+    wanted = {line.strip() for line in open(reduced_refs_path) if line.strip()}
 
-    logging.info("Running: %s", " ".join(cmd))
-
-    with open(reduced_db_path, "w") as output:
-
-        subprocess.run(cmd, stdout=output, check=True)
+    # samtools reads a name ending in ":<number>" or ":<number>-<number>" as a region; such databases go through seqkit
+    if faidx_usable(database) and not any(REGION_LIKE.search(name) for name in wanted):
+        ordered, widths = [], collections.Counter()
+        with open(database + ".fai") as fai:
+            for line in fai:
+                f = line.split("\t")
+                if f[0] in wanted:
+                    ordered.append(f[0])
+                    widths[int(f[3])] += 1
+        missing = len(wanted) - len(ordered)
+        if missing:
+            logging.warning("%d selected references are not in %s.fai and are left out.", missing, database)
+        regions = reduced_db_path + ".regions"
+        with open(regions, "w") as fh:
+            fh.write("".join(name + "\n" for name in ordered))
+        width = widths.most_common(1)[0][0] if widths else 60
+        cmd = ["samtools", "faidx", "-n", str(width), "-r", regions, database]
+        logging.info("Running: %s (%d references)", " ".join(cmd), len(ordered))
+        with open(reduced_db_path, "w") as output:
+            subprocess.run(cmd, stdout=output, check=True)
+        os.remove(regions)
+    else:
+        cmd = ["seqkit", "grep", "-f", reduced_refs_path, "-j", str(threads), database]
+        logging.info("Running: %s", " ".join(cmd))
+        with open(reduced_db_path, "w") as output:
+            subprocess.run(cmd, stdout=output, check=True)
 
     logging.info("Reduced database -> %s", reduced_db_path)
 
