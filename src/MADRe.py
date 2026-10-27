@@ -7,8 +7,12 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import threading
+import time
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
 from NovelPlacement import ancestor, read_taxonomy
 
 # MADRe pipeline:
@@ -67,6 +71,15 @@ DEFAULT_MIN_HIGH_SCORE_FRACTION = 0.8
 DEFAULT_SPECIES_MIN_READ_COUNT = 5
 DEFAULT_SPECIES_MIN_MEAN_SCORE = 0.6
 DEFAULT_SPECIES_LOW_COUNT_CAP = 30
+
+# minimap2 (2.28: index.c, options.c) indexes a large database in parts: it reads the targets in mini-batches of at
+# least 50 Mbp and closes a part once it holds more than -I bases (default 8G). Without --split-prefix each part is
+# mapped on its own and its alignments are written before the next part is read, so mapping the parts separately
+# and joining the outputs in part order gives the same PAF as one run. One run computes the repetitive-minimizer
+# cutoff (mid_occ) from the first part only and keeps it for all parts, so the other parts get it with -f.
+MINIMAP_INDEX_PART_BASES = 8_000_000_000
+MINIMAP_INDEX_MINI_BATCH = 50_000_000
+DEFAULT_DB_MAP_JOBS = 8
 
 
 # =============================================================================
@@ -146,6 +159,156 @@ def run_command_stdout(cmd, output_path, force=False, stderr_path=None):
 
     if not os.path.exists(output_path):
         raise RuntimeError(f"Expected output was not created: {output_path}")
+
+
+def database_index_parts(database):
+    """
+    The parts minimap2 splits database's index into, from database.fai: a list of (first sequence name, start byte,
+    size in bytes or None for the rest of the file, number of sequences). None when the database cannot be read
+    by byte range (no .fai, or a .gz without the .gzi of bgzip, or bgzip missing).
+    """
+
+    if not os.path.exists(database + ".fai"):
+        return None
+    if str(database).endswith(".gz") and (not os.path.exists(database + ".gzi") or not shutil.which("bgzip")):
+        return None
+
+    parts = []
+    first_name, start, n_seq, part_bases, mini_bases = None, 0, 0, 0, 0
+    with open(database + ".fai") as fai:
+        for line in fai:
+            name, length, offset, line_bases, line_width = line.split("\t")[:5]
+            length, offset, line_bases, line_width = int(length), int(offset), int(line_bases), int(line_width)
+            # end of the record: full lines with their newline, then the last partial line with its newline
+            full_lines, rest = divmod(length, line_bases) if line_bases else (0, 0)
+            end = offset + full_lines * line_width + (rest + line_width - line_bases if rest else 0)
+            if first_name is None:
+                first_name = name
+            n_seq += 1
+            part_bases += length
+            mini_bases += length
+            if mini_bases >= MINIMAP_INDEX_MINI_BATCH:
+                mini_bases = 0
+                if part_bases > MINIMAP_INDEX_PART_BASES:
+                    parts.append((first_name, start, end - start, n_seq))
+                    first_name, start, n_seq, part_bases = None, end, 0, 0
+    if n_seq:
+        parts.append((first_name, start, None, n_seq))
+    return parts
+
+
+def database_part_reader(database, start, size):
+    """Shell command writing size bytes of database from byte start (to the end when size is None) to stdout."""
+
+    db = shlex.quote(str(database))
+    if str(database).endswith(".gz"):
+        return f"bgzip -c -d -b {start}" + (f" -s {size}" if size is not None else "") + f" {db}"
+    return f"dd if={db} bs=4M iflag=skip_bytes,count_bytes skip={start}" + (f" count={size}" if size is not None else "") + " status=none"
+
+
+def map_assembly_to_database(minimap, database, assembly, output_path, threads, jobs, force=False, stderr_path=None):
+    """
+    Step 2: minimap2 -x asm5 of the assembly against the full database.
+
+    One minimap2 run spends most of its time building the index parts one after another (reading and sketching the
+    database on a few cores; mapping the contigs to a part takes seconds). Here the parts (database_index_parts) are
+    streamed from the database by byte range and mapped by up to `jobs` minimap2 runs at a time, and their PAFs are
+    written in part order: the same alignments, in the same order, as one run. The first part starts alone; once its
+    index is built, its mid_occ (from its log) is given to the other parts with -f, as one run would use it.
+    No files besides the PAF (written to <output>.tmp and renamed, as in run_command_stdout) and the log: a part's
+    alignments and log are held in memory until the parts before it are written. Falls back to one run when the
+    database has no byte-range access (see database_index_parts) or only one part.
+    """
+
+    if os.path.exists(output_path) and not force:
+        logging.info("Skipping step because output already exists: %s", output_path)
+        return
+
+    parts = database_index_parts(database) if jobs > 1 else None
+    if not parts or len(parts) == 1:
+        if jobs > 1 and parts is None:
+            logging.info("Database cannot be read by byte range (needs .fai, and .gzi + bgzip for .gz); one minimap2 run.")
+        cmd = [minimap, "-x", "asm5", database, assembly, "-t", str(threads)]
+        run_command_stdout(cmd, output_path, force=force, stderr_path=stderr_path)
+        return
+
+    jobs = min(jobs, len(parts))
+    part_threads = max(1, threads // jobs)
+    logging.info("Mapping to %d database index parts, %d at a time with %d threads each.", len(parts), jobs, part_threads)
+
+    # every part must start with the header of its first sequence, else the .fai does not describe the file
+    for i, (name, start, size, n_seq) in enumerate(parts):
+        head = subprocess.run(["bash", "-o", "pipefail", "-c", database_part_reader(database, start, len(name) + 2)], capture_output=True, check=True)
+        if head.stdout.split()[0] != b">" + name.encode():
+            raise RuntimeError(f"Database part {i + 1} does not start with >{name} at byte {start}; is {database}.fai up to date?")
+
+    first_mid_occ = []
+    first_mid_occ_found = threading.Event()
+
+    def map_part(i, mid_occ=None):
+        """(PAF bytes, log bytes) of part i."""
+        name, start, size, n_seq = parts[i]
+        began = time.time()
+        cmd = (
+            f"{database_part_reader(database, start, size)} | "
+            f"{shlex.quote(minimap)} -x asm5 -I {MINIMAP_INDEX_PART_BASES}"
+            + (f" -f {mid_occ}" if mid_occ is not None else "")
+            + f" -t {part_threads} - {shlex.quote(str(assembly))}"
+        )
+        proc = subprocess.Popen(["bash", "-o", "pipefail", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        log_lines = []
+
+        def read_log():
+            for line in proc.stderr:
+                log_lines.append(line)
+                found = re.search(rb"mid_occ = (\d+)", line) if i == 0 else None
+                if found:
+                    first_mid_occ.append(int(found.group(1)))
+                    first_mid_occ_found.set()
+
+        log_reader = threading.Thread(target=read_log)
+        log_reader.start()
+        paf = proc.stdout.read()
+        proc.wait()
+        log_reader.join()
+        if i == 0:
+            first_mid_occ_found.set()  # also when it failed before printing mid_occ
+        if proc.returncode != 0:
+            raise RuntimeError(f"minimap2 failed on database part {i + 1} (exit {proc.returncode}): {cmd}\n" + b"".join(log_lines[-20:]).decode(errors="replace"))
+        logging.info("Database part %d/%d mapped (%d sequences from %s, %.0f s).", i + 1, len(parts), n_seq, name, time.time() - began)
+        return paf, b"".join(log_lines)
+
+    tmp_path = str(output_path) + ".tmp"
+    log_handle = open(stderr_path, "wb") if stderr_path else None
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            results = [pool.submit(map_part, 0)]
+            first_mid_occ_found.wait()
+            if not first_mid_occ:
+                results[0].result()  # raises if the first part failed
+                raise RuntimeError("No mid_occ in the log of database part 1; cannot map the other parts the way one minimap2 run would.")
+            logging.info("mid_occ of the first database part: %d (used for all parts).", first_mid_occ[0])
+            results += [pool.submit(map_part, i, first_mid_occ[0]) for i in range(1, len(parts))]
+            with open(tmp_path, "wb") as out:
+                for i, result in enumerate(results):
+                    try:
+                        paf, log = result.result()
+                    except Exception:
+                        for waiting in results[i + 1 :]:
+                            waiting.cancel()  # parts not started yet; running ones finish first
+                        raise
+                    out.write(paf)
+                    if log_handle:
+                        name, start, size, n_seq = parts[i]
+                        log_handle.write(f"### database index part {i + 1}/{len(parts)}: {n_seq} sequences from {name}\n".encode())
+                        log_handle.write(log)
+                    results[i] = None  # free the part's alignments
+        os.replace(tmp_path, output_path)
+    finally:
+        if log_handle:
+            log_handle.close()
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def concatenate_fastas(input_fastas, output_path, force=False):
@@ -522,6 +685,15 @@ def main():
     parser.add_argument("--reads_flag", default="ont", choices=["pacbio", "hifi", "ont"], help="Read technology. Default: ont")
 
     parser.add_argument("--threads", type=int, default=32, help="Number of threads. Default: 32")
+    parser.add_argument(
+        "--db-map-jobs",
+        type=int,
+        default=DEFAULT_DB_MAP_JOBS,
+        help="Step 2 maps the contigs to minimap2's database index parts (~8 Gbp each) this many at a time, --threads "
+        "shared between them; each holds one part's index (~50 GB RAM on a RefSeq-sized database). Same PAF as one "
+        "minimap2 run. Needs the database's .fai (and .gzi for a bgzip .gz); otherwise, or with 1, one minimap2 run. "
+        f"Default: {DEFAULT_DB_MAP_JOBS}",
+    )
 
     parser.add_argument("-F", "--force", action="store_true", help=("Rerun external steps even if outputs " "already exist."))
 
@@ -773,9 +945,16 @@ def main():
 
     assembly_paf = os.path.join(args.out_folder, "assembly.to_big_db.paf")
 
-    cmd = [PATH_MINIMAP, "-x", "asm5", PREDEFINED_DB, assembly_fasta, "-t", str(args.threads)]
-
-    run_command_stdout(cmd, assembly_paf, force=args.force, stderr_path=os.path.join(args.out_folder, "minimap_reduction.log"))
+    map_assembly_to_database(
+        PATH_MINIMAP,
+        PREDEFINED_DB,
+        assembly_fasta,
+        assembly_paf,
+        args.threads,
+        args.db_map_jobs,
+        force=args.force,
+        stderr_path=os.path.join(args.out_folder, "minimap_reduction.log"),
+    )
 
     require_file(assembly_paf, "Assembly-to-reference PAF")
 
@@ -991,6 +1170,7 @@ def main():
     sr_args.reference_genome_map = args.reference_genome_map
     sr_args.taxonomy_nodes = args.nodes
     sr_args.taxonomy_names = args.names
+    sr_args.threads = args.threads
     sr_args.novel_placement = not args.no_novel_placement
     sr_args.placement_report = args.placement_report
     sr_args.genome_depth = args.genome_depth

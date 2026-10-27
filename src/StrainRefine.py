@@ -15,7 +15,6 @@
 #   are pooled into one vector, so a fragmented draft genome clusters as one
 #   strain. See pool_reads_by_genome() and its call site in run().
 import argparse
-import csv
 from collections import defaultdict
 import logging
 import json
@@ -204,7 +203,17 @@ def species_identification_with_thresholds(U, NU, genomes, SS_info_json, min_rea
 
     iteration = 0
 
-    while not stable and iteration < max_iterations:
+    # An iteration depends only on the assignments it starts from, so once the assignments repeat (after iteration i
+    # they equal those after iteration i - period) every later iteration repeats too: (max_iterations - i) % period
+    # more iterations give the assignments iteration max_iterations would end with. The last states are kept as
+    # tuples in read order (the reads never change, only their species).
+    max_period = 4
+
+    recent_states = [tuple(species_class.values())]
+
+    last_iteration = max_iterations
+
+    while not stable and iteration < last_iteration:
 
         iteration += 1
 
@@ -327,6 +336,25 @@ def species_identification_with_thresholds(U, NU, genomes, SS_info_json, min_rea
             f"stable={stable}"
         )
 
+        if not stable and last_iteration == max_iterations:
+
+            state = tuple(species_class.values())
+
+            for period in range(2, max_period + 1):
+
+                if len(recent_states) >= period and recent_states[-period] == state:
+
+                    last_iteration = iteration + (max_iterations - iteration) % period
+
+                    logging.info(
+                        f"Iteration {iteration}: assignments repeat every {period} iterations; "
+                        f"stopping after iteration {last_iteration}, which ends like iteration {max_iterations}"
+                    )
+
+                    break
+
+            recent_states = (recent_states + [state])[-max_period:]
+
     final_species_counts = {}
 
     for species in species_class.values():
@@ -337,7 +365,11 @@ def species_identification_with_thresholds(U, NU, genomes, SS_info_json, min_rea
 
     logging.debug("Final species counts: " + ", ".join([f"{s}:{c}" for s, c in sorted(final_species_counts.items(), key=lambda x: x[1], reverse=True)]))
 
-    if not stable:
+    if not stable and last_iteration < max_iterations:
+
+        logging.warning(f"Species identification did not converge (assignments repeat); result as after max_iterations={max_iterations}")
+
+    elif not stable:
 
         logging.warning(f"Species identification reached max_iterations={max_iterations} before convergence")
 
@@ -1106,19 +1138,24 @@ def load_reference_genome_map(path):
     mapping = {}
     lengths = {}
     with open(path) as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
+        header = handle.readline().rstrip("\r\n").split("\t")
         required = {"reference", "genome_id", "genome_length"}
-        if not required.issubset(reader.fieldnames or []):
+        if not required.issubset(header):
             raise ValueError("Genome map requires reference, genome_id, genome_length columns")
-        for row in reader:
-            ref = (row["reference"] or "").strip()
-            genome = (row["genome_id"] or "").strip()
+        ref_col, genome_col, length_col = header.index("reference"), header.index("genome_id"), header.index("genome_length")
+        n_cols = max(ref_col, genome_col, length_col) + 1
+        for line_num, line in enumerate(handle, start=2):
+            row = line.rstrip("\r\n").split("\t")
+            if len(row) < n_cols:
+                raise ValueError(f"Invalid genome map entry at line {line_num}")
+            ref = row[ref_col].strip()
+            genome = row[genome_col].strip()
             try:
-                length = int(row["genome_length"])
-            except (TypeError, ValueError):
-                raise ValueError(f"Invalid genome length at line {reader.line_num}") from None
+                length = int(row[length_col])
+            except ValueError:
+                raise ValueError(f"Invalid genome length at line {line_num}") from None
             if not ref or not genome or length <= 0:
-                raise ValueError(f"Invalid genome map entry at line {reader.line_num}")
+                raise ValueError(f"Invalid genome map entry at line {line_num}")
             if ref in mapping and mapping[ref] != (genome, length):
                 raise ValueError(f"Conflicting genome mapping for {ref}")
             if genome in lengths and lengths[genome] != length:
@@ -1173,7 +1210,11 @@ def run(args):
                 for idx in value[0]:
                     read_sets[genomes[idx]].add(read_id)
             placement = NovelPlacement.Placement(
-                read_sets, species_strain_info, NovelPlacement.load_contig_classification(args.contig_classification), args.taxonomy_nodes
+                read_sets,
+                species_strain_info,
+                NovelPlacement.load_contig_classification(args.contig_classification),
+                args.taxonomy_nodes,
+                workers=getattr(args, "threads", 1),
             )
             placement_changes = placement.compute()
             for contig, group in placement_changes.items():
@@ -1305,6 +1346,8 @@ def run(args):
         "ref_intervals": ref_intervals,
         "updated_clusters": updated_clusters,
         "placed_species_contigs": placed_species_contigs,
+        "reference_genome_map": reference_genome_map_for_pooling,  # loaded once, reused by CalculateAbundances
+        "taxonomy": (placement.parents, placement.ranks) if placement is not None else None,  # nodes.dmp, read by the placement
     }
 
 
@@ -1449,6 +1492,8 @@ def main():
     )
     # earlier option (the figures used to be drawn by default); accepted for old commands, no effect
     parser.add_argument("--no_placement_report", action="store_true", help=argparse.SUPPRESS)
+
+    parser.add_argument("--threads", type=int, default=1, help="Processes for the novel-contig placement. Default: 1")
 
     parser.add_argument(
         "--genome_depth",

@@ -25,6 +25,8 @@ TAXON_<family taxid>, or unchanged (not counted).
 """
 
 import csv
+import gc
+import multiprocessing
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -550,6 +552,13 @@ def load_contig_classification(path):
     return out
 
 
+_WORKER_PLACEMENT = None  # the Placement whose contigs forked workers place (Placement.compute)
+
+
+def _place_contig_in_worker(task):
+    return _WORKER_PLACEMENT._place_contig(*task)
+
+
 class Placement:
     """
     Novel-contig placement for one run, used by StrainRefine in this order:
@@ -557,8 +566,9 @@ class Placement:
     after strain clustering, record_strain_outcome(); finally write() for novel_placement.tsv and the report.
     """
 
-    def __init__(self, read_sets, species_info, classification, nodes_path, opts=None):
+    def __init__(self, read_sets, species_info, classification, nodes_path, opts=None, workers=1):
         self.opts = opts or PlacementOptions()
+        self.workers = workers
         self.read_sets = read_sets
         self.species_info = species_info
         self.classification = classification
@@ -629,93 +639,27 @@ class Placement:
                 family_refs[fam].append(ref)
                 self.family_species_refs[fam][species_of(taxid)].add(ref)
         self.family_refs = family_refs
-        common = dict(
-            min_population_size=o.min_population_size,
-            min_shared_reads=o.min_shared_reads,
-            min_contig_fraction=o.min_contig_fraction,
-            linkage_method=o.linkage_method,
-        )
-        for cid, fam in self.contig_family.items():
-            contig_reads = self.read_sets.get(cid, set())
-            _, vcig, best = self.classification.get(cid, ('', 0.0, ''))
-            base = dict(
-                contig=cid, original_group=novel[cid], candidate_family=fam, contig_reads=len(contig_reads), best_hit=best, best_hit_vcig=round(vcig, 4)
-            )
-            if len(contig_reads) < o.min_population_size:
-                self.rows.append(dict(base, decision='contig_population_too_small'))
-                continue
-            result, status_log = None, []
-            cands = [(r, self.read_sets.get(r, set())) for r in family_refs.get(fam, [])]
-            members, shared, status = cluster_step(
-                cid, contig_reads, cands, cut_distance=o.cut_distance_pass1, known=self._known(('references', fam), cands), **common
-            )
-            status_log.append(f'pass1={status}')
-            if members:
-                sp = {species_of(m.split('|')[1]) for m in members}
-                if len(sp) == 1:
-                    result = ('species', sp.pop(), members, shared, 1)
-            if result is None:
-                cands = list(self.species_pools(fam).items())
-                members, shared, status = cluster_step(
-                    cid, contig_reads, cands, cut_distance=o.cut_distance_pass2, known=self._known(('species', fam), cands), **common
-                )
-                status_log.append(f'pass2={status}')
-                if members:
-                    genera = {rank_of(m, 'genus') for m in members}
-                    if len(genera) == 1 and None not in genera:
-                        result = ('genus', genera.pop(), members, shared, 2)
-            if result is None:
-                pools = defaultdict(set)
-                for sp_taxid, pooled in self.species_pools(fam).items():
-                    g = rank_of(sp_taxid, 'genus')
-                    if g:
-                        pools[g] |= pooled
-                members, shared, status = cluster_step(
-                    cid,
-                    contig_reads,
-                    list(pools.items()),
-                    cut_distance=o.cut_distance_pass3,
-                    allow_single=o.single_genus_family,
-                    known=self._known(('genera', fam), list(pools.items())),
-                    **common,
-                )
-                status_log.append(f'pass3={status}')
-                if members:
-                    result = ('family', fam, members, shared, 3)
-            if result is None:
-                row = dict(base, decision='no_match_at_any_level (' + ', '.join(status_log) + ')')
-            else:
-                rank, label, members, shared, pass_num = result
-                frac = shared / len(contig_reads)
-                c_rank, c_label = self._count_rank(cid, rank, label, frac)
-                row = dict(
-                    base,
-                    resolved_rank=rank,
-                    resolved_label=label,
-                    pass_used=pass_num,
-                    cluster_members=','.join(str(m) for m in members),
-                    contig_shared_fraction=round(frac, 4),
-                    count_rank=c_rank,
-                    count_label=c_label,
-                    count_source='clustering' if c_rank else '',
-                    decision='clustered',
-                )
-            genus = rank_of(best.split('|')[1], 'genus') if '|' in best else None
-            if row.get('count_rank'):
-                # only when clustering itself stopped at family; a genus or species from clustering that
-                # _count_rank demoted (best hit in another genus) is not overruled by the best hit
-                if (
-                    o.fallback_refines_family
-                    and row['count_rank'] == 'family'
-                    and row['resolved_rank'] == 'family'
-                    and genus
-                    and rank_of(genus, 'family') == row['count_label']
-                    and vcig >= o.sequence_fallback_vcig
-                ):
-                    row.update(count_rank='genus', count_label=genus, count_source='sequence_refined')
-            elif genus and vcig >= o.sequence_fallback_vcig:
-                row.update(count_rank='genus', count_label=genus, count_source='sequence_fallback')
-            self.rows.append(row)
+        # Every contig is placed from its own reads and its family's candidates only, so contigs can be placed in any
+        # order: with workers > 1 they are spread over forked processes (scipy's linkage holds the GIL), after the
+        # per-family candidate distances are computed here once, and the rows are collected in contig order.
+        tasks = [(cid, fam, novel[cid]) for cid, fam in self.contig_family.items()]
+        workers = min(self.workers, len(tasks))
+        if workers > 1:
+            for fam in dict.fromkeys(fam for cid, fam, _ in tasks if len(self.read_sets.get(cid, ())) >= o.min_population_size):
+                self._known(('references', fam), self._reference_candidates(fam))
+                self._known(('species', fam), list(self.species_pools(fam).items()))
+                self._known(('genera', fam), list(self.genus_pools(fam).items()))
+            global _WORKER_PLACEMENT
+            _WORKER_PLACEMENT = self
+            gc.freeze()  # the forked workers then do not copy the parent's objects when their garbage collector runs
+            try:
+                with multiprocessing.get_context('fork').Pool(workers) as pool:
+                    self.rows.extend(pool.imap(_place_contig_in_worker, tasks, chunksize=1))
+            finally:
+                gc.unfreeze()
+                _WORKER_PLACEMENT = None
+        else:
+            self.rows.extend(self._place_contig(*task) for task in tasks)
         changes = {}
         for row in self.rows:
             rank, label = row.get('count_rank'), row.get('count_label')
@@ -726,6 +670,104 @@ class Placement:
             row['new_group'] = group
             changes[row['contig']] = group
         return changes
+
+    def _reference_candidates(self, fam):
+        """Pass 1 candidates of family fam: its references with their reads."""
+        return [(r, self.read_sets.get(r, set())) for r in self.family_refs.get(fam, [])]
+
+    def genus_pools(self, fam):
+        """genus taxid -> reads of all its species in family fam (pass 3 candidates)."""
+        pools = defaultdict(set)
+        for sp_taxid, pooled in self.species_pools(fam).items():
+            g = self.rank_of(sp_taxid, 'genus')
+            if g:
+                pools[g] |= pooled
+        return pools
+
+    def _place_contig(self, cid, fam, original_group):
+        """The placement row of one novel contig: passes 1-3, then the counting rules."""
+        o, rank_of, species_of = self.opts, self.rank_of, self.species_of
+        common = dict(
+            min_population_size=o.min_population_size,
+            min_shared_reads=o.min_shared_reads,
+            min_contig_fraction=o.min_contig_fraction,
+            linkage_method=o.linkage_method,
+        )
+        contig_reads = self.read_sets.get(cid, set())
+        _, vcig, best = self.classification.get(cid, ('', 0.0, ''))
+        base = dict(
+            contig=cid, original_group=original_group, candidate_family=fam, contig_reads=len(contig_reads), best_hit=best, best_hit_vcig=round(vcig, 4)
+        )
+        if len(contig_reads) < o.min_population_size:
+            return dict(base, decision='contig_population_too_small')
+        result, status_log = None, []
+        cands = self._reference_candidates(fam)
+        members, shared, status = cluster_step(
+            cid, contig_reads, cands, cut_distance=o.cut_distance_pass1, known=self._known(('references', fam), cands), **common
+        )
+        status_log.append(f'pass1={status}')
+        if members:
+            sp = {species_of(m.split('|')[1]) for m in members}
+            if len(sp) == 1:
+                result = ('species', sp.pop(), members, shared, 1)
+        if result is None:
+            cands = list(self.species_pools(fam).items())
+            members, shared, status = cluster_step(
+                cid, contig_reads, cands, cut_distance=o.cut_distance_pass2, known=self._known(('species', fam), cands), **common
+            )
+            status_log.append(f'pass2={status}')
+            if members:
+                genera = {rank_of(m, 'genus') for m in members}
+                if len(genera) == 1 and None not in genera:
+                    result = ('genus', genera.pop(), members, shared, 2)
+        if result is None:
+            pools = self.genus_pools(fam)
+            members, shared, status = cluster_step(
+                cid,
+                contig_reads,
+                list(pools.items()),
+                cut_distance=o.cut_distance_pass3,
+                allow_single=o.single_genus_family,
+                known=self._known(('genera', fam), list(pools.items())),
+                **common,
+            )
+            status_log.append(f'pass3={status}')
+            if members:
+                result = ('family', fam, members, shared, 3)
+        if result is None:
+            row = dict(base, decision='no_match_at_any_level (' + ', '.join(status_log) + ')')
+        else:
+            rank, label, members, shared, pass_num = result
+            frac = shared / len(contig_reads)
+            c_rank, c_label = self._count_rank(cid, rank, label, frac)
+            row = dict(
+                base,
+                resolved_rank=rank,
+                resolved_label=label,
+                pass_used=pass_num,
+                cluster_members=','.join(str(m) for m in members),
+                contig_shared_fraction=round(frac, 4),
+                count_rank=c_rank,
+                count_label=c_label,
+                count_source='clustering' if c_rank else '',
+                decision='clustered',
+            )
+        genus = rank_of(best.split('|')[1], 'genus') if '|' in best else None
+        if row.get('count_rank'):
+            # only when clustering itself stopped at family; a genus or species from clustering that
+            # _count_rank demoted (best hit in another genus) is not overruled by the best hit
+            if (
+                o.fallback_refines_family
+                and row['count_rank'] == 'family'
+                and row['resolved_rank'] == 'family'
+                and genus
+                and rank_of(genus, 'family') == row['count_label']
+                and vcig >= o.sequence_fallback_vcig
+            ):
+                row.update(count_rank='genus', count_label=genus, count_source='sequence_refined')
+        elif genus and vcig >= o.sequence_fallback_vcig:
+            row.update(count_rank='genus', count_label=genus, count_source='sequence_fallback')
+        return row
 
     def record_strain_outcome(self, clusters):
         """clusters: StrainRefine's final strain clusters (lists of reference

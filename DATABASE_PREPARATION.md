@@ -100,6 +100,8 @@ samtools faidx my_db.bgz.fna.gz      # writes my_db.bgz.fna.gz.fai and .gzi next
 
 Use the bgzip file as `predefined_db`. The extracted sequences are the same; only header descriptions after the first word are not copied. MADRe falls back to `seqkit grep` when there is no index, or when a sequence name ends in something that looks like a region (`name:100` or `name:100-200`).
 
+The index also speeds up the mapping of the contigs to the database: minimap2 indexes a large database in parts of ~8 Gbp, one after another, and MADRe then maps several parts at a time (`--db-map-jobs`, default 8), with the same result as one minimap2 run. On a 653 Gbp RefSeq database this took 46 min instead of about 3 h.
+
 ## config.ini
 
 ```ini

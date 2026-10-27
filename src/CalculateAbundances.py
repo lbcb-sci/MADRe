@@ -309,7 +309,8 @@ def calculate_abundance_data(
     best_database_hit = {}
 
     if reference_genome_map is not None:
-        genome_map = load_reference_genome_map(reference_genome_map)
+        # a path, or the map StrainRefine already loaded
+        genome_map = reference_genome_map if isinstance(reference_genome_map, dict) else load_reference_genome_map(reference_genome_map)
         genome_sequence_bases = None
         if genome_depth == "median" and read_sequences:
             # bases per sequence of each genome, each read on the sequence it aligns to best
@@ -761,7 +762,7 @@ def run(sr_result, args):
     classification_path = getattr(args, "contig_classification", None)
 
     # each input file is read once
-    taxonomy = read_taxonomy(nodes) if nodes else None
+    taxonomy = (sr_result.get("taxonomy") or read_taxonomy(nodes)) if nodes else None
     names = load_ncbi_names(names_path) if names_path else {}
     contig_info = NovelPlacement.load_contig_classification(classification_path) if classification_path else {}
     contig_best_ref = {cid: best for cid, (_, _, best) in contig_info.items() if best} if classification_path else None
@@ -772,7 +773,7 @@ def run(sr_result, args):
         sr_result["read_lengths"],
         sr_result["reference_lengths"],
         reference_fasta=getattr(args, "reference_fasta", None),
-        reference_genome_map=getattr(args, "reference_genome_map", None),
+        reference_genome_map=sr_result.get("reference_genome_map") or getattr(args, "reference_genome_map", None),
         taxonomy=taxonomy,
         contig_best_ref=contig_best_ref,
         read_sequences=sr_result.get("read_sequences"),

@@ -128,6 +128,7 @@ Frequently used options (all: `madre --help`):
 | `--placement-report` | draw a figure of the placement of every novel contig with a candidate family (`novel_placement_report/`, see [Placement figures](#placement-figures)); off by default, since with thousands of novel contigs drawing takes hours |
 | `--keep-reduced-db` | keep `reduced_db.fa` (by default only the list `reduced_db_refs.txt` is kept) |
 | `--threads N` | threads for all tools (default 32) |
+| `--db-map-jobs N` | map the contigs to the database's minimap2 index parts (~8 Gbp each) N at a time (default 8; each needs ~50 GB RAM on a RefSeq-sized database). Same result as one minimap2 run; needs the bgzip database with its index (see [DATABASE_PREPARATION.md](DATABASE_PREPARATION.md)), otherwise, or with 1, one minimap2 run |
 | `-F` | rerun steps whose outputs already exist (by default finished steps are skipped, so an interrupted run can be resumed) |
 
 ## Output files
